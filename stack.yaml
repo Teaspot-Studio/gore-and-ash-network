@@ -8,7 +8,7 @@ packages:
 - '.'
 - location:
     git: https://github.com/Teaspot-Studio/gore-and-ash.git
-    commit: 8405b253e2cfc17e6eff39a251387384f33fbd4a
+    commit: cdc2c6072706c12fecafaaa9112f7c9be50cd938
 - location:
     git: https://github.com/Teaspot-Studio/gore-and-ash-logging.git
     commit: 818d78ec8a803dcc1ccb478b8af9974e49f02a51
