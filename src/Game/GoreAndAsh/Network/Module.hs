@@ -1,4 +1,15 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-|
+Module      : Game.GoreAndAsh.Network.Module
+Description : Monad transformer and core module instance
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+
+The module contains declaration of module monad transformer and instance of 'GameModule'.
+-}
 module Game.GoreAndAsh.Network.Module(
     NetworkT(..)
   ) where
@@ -19,6 +30,24 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Sequence as S
 import qualified Network.ENet.Bindings as B 
 
+-- | Monad transformer of network core module.
+--
+-- [@s@] - State of next core module in modules chain;
+--
+-- [@m@] - Next monad in modules monad stack;
+--
+-- [@a@] - Type of result value;
+--
+-- How to embed module:
+-- 
+-- @
+-- type AppStack = ModuleStack [LoggingT, NetworkT, ... other modules ... ] IO
+--
+-- newtype AppMonad a = AppMonad (AppStack a)
+--   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
+-- @
+--
+-- The module is NOT pure within first phase (see 'ModuleStack' docs), therefore currently only 'IO' end monad can handler the module.
 newtype NetworkT s m a = NetworkT { runNetworkT :: StateT (NetworkState s) m a }
   deriving (Functor, Applicative, Monad, MonadState (NetworkState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask)
 

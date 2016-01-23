@@ -1,4 +1,13 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-|
+Module      : Game.GoreAndAsh.Network.State
+Description : Internal state of core module
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Network.State(
     NetworkState(..)
   , Host
@@ -16,9 +25,9 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Sequence as S
 import qualified Network.ENet.Bindings as B
 
--- | Server side connection
+-- | Local endpoint
 type Host = Ptr B.Host 
--- | Client side connection
+-- | Remote endpoint
 type Peer = Ptr B.Peer
 
 instance Hashable Peer where
@@ -31,6 +40,8 @@ instance Hashable B.ChannelID where
   hashWithSalt s (B.ChannelID i) = hashWithSalt s i 
 
 -- | Inner state of network layer
+--
+-- [@s@] - State of next module, the states are chained via nesting.
 data NetworkState s = NetworkState {
   networkHost :: !(Maybe Host)
 , networkPeers :: !(S.Seq Peer)

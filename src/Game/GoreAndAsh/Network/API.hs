@@ -1,12 +1,23 @@
+{-|
+Module      : Game.GoreAndAsh.Network.API
+Description : Monadic and arrow API for network core module
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+
+The module contains monadic and arrow API of network core module.
+-}
 module Game.GoreAndAsh.Network.API(
     NetworkMonad(..)
-  -- | Peer handling
+  -- * Peer handling
   , peersConnected
   , peersDisconnected
   , peerDisconnected
   , currentPeers
   , onPeers
-  -- | Messaging support
+  -- * Messaging support
   , peerMessages
   , peerSend
   , peerSendMany
@@ -211,7 +222,7 @@ onPeers w = switch $ proc _ -> do -- Trick to immediate switch to current set of
     conEvent <- peersConnected -< ()
     disEvent <- peersDisconnected -< ()
 
-    -- | Local state loop to catch up peers
+    -- Local state loop to catch up peers
     rec curPeers' <- forceNF . delay initalPeers -< curPeers
         let addEvent = (\ps -> curPeers' S.>< ps) <$> conEvent
         let addedPeers = event curPeers' id addEvent -- To not loose added peers when some removed

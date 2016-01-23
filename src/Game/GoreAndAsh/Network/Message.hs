@@ -1,3 +1,12 @@
+{-|
+Module      : Game.GoreAndAsh.Network
+Description : Network message definition
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Network.Message(
     Message(..)
   , MessageType(..)
