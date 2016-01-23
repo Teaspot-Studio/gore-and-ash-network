@@ -11,6 +11,7 @@ packages:
     git: https://github.com/Teaspot-Studio/bitset.git
     commit: 5bb58562ff99c551fa9643321c95a6ba27977596
 
+
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
 - typesafe-endian-0.1.0.1
