@@ -6,11 +6,8 @@ resolver: lts-4.2
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
-- './henet'
-- location:
-    git: https://github.com/Teaspot-Studio/bitset.git
-    commit: 5bb58562ff99c551fa9643321c95a6ba27977596
-
+- '../gore-and-ash'
+- '../gore-and-ash-logging'
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:

@@ -11,12 +11,17 @@ author:              Anton Gushcha
 maintainer:          ncrashed@gmail.com
 copyright:           2015-2016 Anton Gushcha,
                      2013-2015 John Ericson,
-                     2002-2013 Lee Salzman
+                     2002-2013 Lee Salzman,
+                     2013 Sergei Lebedev <superbobry@gmail.com>, 
+                     2013 Aleksey Kladov <aleksey.kladov@gmail.com>,
+                     2013 Fedor Gogolev <knsd@knsd.net>
+
 category:            Game
-build-type:          Simple
+build-type:          Custom
 cabal-version:       >=1.10
 
 extra-source-files:   enet/include/enet/*.h
+                      bin/mkDerivedGmpConstants.c
 
 Bug-reports:          https://github.com/Teaspot-Studio/gore-and-ash-network/issues
 Source-repository head
@@ -24,13 +29,19 @@ Source-repository head
   location:           git@github.com:Teaspot-Studio/gore-and-ash-network.git
 
 library
-  hs-source-dirs:     src, henet
+  hs-source-dirs:     src, henet, bitset
   exposed-modules:    Game.GoreAndAsh.Network
                       Game.GoreAndAsh.Network.API
                       Game.GoreAndAsh.Network.Message
                       Game.GoreAndAsh.Network.Module
                       Game.GoreAndAsh.Network.State
   other-modules:
+                      Data.BitSet
+                      Data.BitSet.Dynamic
+                      Data.BitSet.Generic
+                      Data.BitSet.Word
+                      GHC.Integer.GMP.PrimExt
+                      GHC.Integer.GMP.TypeExt
                       Network.ENet
                       Network.ENet.Bindings
                       Network.ENet.Bindings.Callbacks
@@ -40,7 +51,6 @@ library
                       Network.ENet.Internal
                       Network.ENet.Packet
                       Network.ENet.Peer
-
   c-sources:          
                       enet/callbacks.c
                       enet/compress.c
@@ -50,23 +60,26 @@ library
                       enet/peer.c
                       enet/protocol.c
 
+                      cbits/gmp-extras.cmm
+
   include-dirs:       enet
                       enet/include
-
+                      cbits
 
   build-tools:        hsc2hs
 
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5
-                     , bitset >= 1.5
                      , bytestring >= 0.10.6.0
                      , containers >= 0.5.6.2
                      , deepseq >= 1.4.1.1
                      , exceptions >= 0.8.0.2
                      , extra >= 1.4.2
+                     , ghc-prim
                      , gore-and-ash >= 1.1.0.0
                      , gore-and-ash-logging >= 1.1.0.0
                      , hashable >= 1.2.3.3
+                     , integer-gmp >= 1.0.0.0
                      , mtl >= 2.2.1
                      , network >= 2.6.2.1
                      , text >= 1.2.1.3
@@ -88,6 +101,11 @@ library
                        TypeFamilies
                        TypeSynonymInstances
                        UndecidableInstances
+
+  if os(windows)
+    extra-libraries:  gmp-10
+  else
+    extra-libraries:  gmp
 
   cc-options:         -g
   ld-options:         -g
