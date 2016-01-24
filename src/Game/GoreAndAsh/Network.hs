@@ -11,7 +11,7 @@ The core module contains API for basic networking for Gore&Ash. The network modu
 over Enet library, UDP transport with custom implementation of reliability. The API provides
 connection handling and basic message handling (bytestring sending and receiving).
 
-The module doesn't depends on following core modules:
+The module depends on following core modules:
 
 * logging - "Game.GoreAndAsh.Logging"
 
