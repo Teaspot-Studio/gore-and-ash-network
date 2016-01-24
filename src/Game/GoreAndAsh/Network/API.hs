@@ -47,6 +47,7 @@ import qualified Data.Foldable as F
 import qualified Data.HashMap.Strict as H 
 import qualified Data.Sequence as S
 
+-- | Low-level monadic API of the core module
 class (MonadIO m, MonadCatch m) => NetworkMonad m where
   -- | Start listening for messages, should be called once
   networkBind :: LoggingMonad m => Maybe SockAddr -- ^ Address to listen, Nothing is client
