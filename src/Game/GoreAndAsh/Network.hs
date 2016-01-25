@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-unused-imports #-}
 {-|
 Module      : Game.GoreAndAsh.Network
 Description : Module that contains network low-level API for Gore&Ash
@@ -69,6 +70,10 @@ module Game.GoreAndAsh.Network(
   , peerSend
   , peerSendMany
   ) where
+
+-- imports for docs
+import Game.GoreAndAsh.Core
+import Game.GoreAndAsh.Logging 
 
 import Game.GoreAndAsh.Network.API as X
 import Game.GoreAndAsh.Network.Message as X

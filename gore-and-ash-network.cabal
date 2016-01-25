@@ -1,5 +1,5 @@
 name:                gore-and-ash-network
-version:             1.1.0.0
+version:             1.1.0.1
 synopsis:            Core module for Gore&Ash engine with low level network API
 description:         Please see README.md
 homepage:            https://github.com/Teaspot-Studio/gore-and-ash-network
