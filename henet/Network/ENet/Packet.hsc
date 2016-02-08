@@ -5,7 +5,6 @@ import Foreign as F
 import Foreign.C.Error
 import Foreign.C.Types
 
-import Data.BitSet.Generic(BitSet(getBits))
 import Data.ByteString.Unsafe
 
 import Network.ENet
@@ -23,7 +22,7 @@ destroy.
 -- this ^ is why unsafe is OK
 poke :: Packet -> IO (Ptr B.Packet)
 poke (Packet f bs) = unsafeUseAsCStringLen bs $ \(ptr, len) ->
-  B.packetCreate (castPtr ptr) (fromIntegral len) $ getBits f
+  B.packetCreate (castPtr ptr) (fromIntegral len) $ unPacketFlagSet f
 
 destroy :: Ptr B.Packet -> IO ()
 destroy = B.packetDestroy
@@ -40,7 +39,7 @@ peek ptr = do f <- (#peek ENetPacket, flags     ) ptr
               p <- (#peek ENetPacket, data      ) ptr
               l <- (#peek ENetPacket, dataLength) ptr
               b <- unsafePackCStringFinalizer p l $ destroy ptr
-              return $ Packet f b
+              return $ Packet (PacketFlagSet f) b
 
 resize :: Ptr B.Packet -> CSize -> IO ()
 resize ptr size = do _ <- throwErrnoIf -- explicity throw away return after

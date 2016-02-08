@@ -11,17 +11,12 @@ author:              Anton Gushcha
 maintainer:          ncrashed@gmail.com
 copyright:           2015-2016 Anton Gushcha,
                      2013-2015 John Ericson,
-                     2002-2013 Lee Salzman,
-                     2013 Sergei Lebedev <superbobry@gmail.com>, 
-                     2013 Aleksey Kladov <aleksey.kladov@gmail.com>,
-                     2013 Fedor Gogolev <knsd@knsd.net>
+                     2002-2013 Lee Salzman
 
 category:            Game
-build-type:          Custom
+build-type:          Simple
 cabal-version:       >=1.10
 
-extra-source-files:   enet/include/enet/*.h
-                      bin/mkDerivedGmpConstants.c
 
 Bug-reports:          https://github.com/Teaspot-Studio/gore-and-ash-network/issues
 Source-repository head
@@ -29,19 +24,13 @@ Source-repository head
   location:           git@github.com:Teaspot-Studio/gore-and-ash-network.git
 
 library
-  hs-source-dirs:     src, henet, bitset
+  hs-source-dirs:     src, henet
   exposed-modules:    Game.GoreAndAsh.Network
                       Game.GoreAndAsh.Network.API
                       Game.GoreAndAsh.Network.Message
                       Game.GoreAndAsh.Network.Module
                       Game.GoreAndAsh.Network.State
   other-modules:
-                      Data.BitSet
-                      Data.BitSet.Dynamic
-                      Data.BitSet.Generic
-                      Data.BitSet.Word
-                      GHC.Integer.GMP.PrimExt
-                      GHC.Integer.GMP.TypeExt
                       Network.ENet
                       Network.ENet.Bindings
                       Network.ENet.Bindings.Callbacks
@@ -60,11 +49,8 @@ library
                       enet/peer.c
                       enet/protocol.c
 
-                      cbits/gmp-extras.cmm
-
   include-dirs:       enet
                       enet/include
-                      cbits
 
   build-tools:        hsc2hs
 
@@ -101,11 +87,6 @@ library
                        TypeFamilies
                        TypeSynonymInstances
                        UndecidableInstances
-
-  if os(windows)
-    extra-libraries:  gmp-10
-  else
-    extra-libraries:  gmp
 
   cc-options:         -g
   ld-options:         -g

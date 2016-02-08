@@ -5,11 +5,12 @@ import Control.Concurrent (runInBoundThread)
 
 import Data.ByteString (ByteString)
 import Data.Word (Word32)
-import Data.BitSet.Generic (BitSet)
+import Data.Bits ((.|.), (.&.))
 
 import Foreign.C.Error
 
 import qualified Network.ENet.Bindings as B
+import qualified Data.Foldable as F 
 
 {-| Like 'withSocketsDo' from the network package. On windows it checks the
 version of Winsock, initializes it, and then after execution of the given
@@ -44,7 +45,20 @@ withENetDo x = runInBoundThread $ do
   B.deinitialize
   return retVal
 
-type PacketFlagSet = BitSet Word32 B.PacketFlag
+-- | Build from combining B.PacketFlag
+newtype PacketFlagSet = PacketFlagSet { unPacketFlagSet :: Word32 }
+
+makePacketFlagSet :: (F.Foldable t, Functor t) => (t B.PacketFlag) -> PacketFlagSet
+makePacketFlagSet = PacketFlagSet . F.foldl' (.|.) 0 . fmap (fromIntegral . fromEnum)
+
+unpackPacketFlagSet :: PacketFlagSet -> [B.PacketFlag]
+unpackPacketFlagSet (PacketFlagSet w) = filter ((/= 0) . (w .&.) . fromIntegral . fromEnum) [B.Reliable .. B.IsSent]
+
+emptyPacketFlagSet :: PacketFlagSet
+emptyPacketFlagSet = PacketFlagSet 0 
+
+instance Show PacketFlagSet where 
+  show = show . unpackPacketFlagSet
 
 -- | A more high level notion of a packet than used by the basic Bindings
 data Packet = Packet PacketFlagSet ByteString

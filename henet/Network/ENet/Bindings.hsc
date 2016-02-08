@@ -100,13 +100,26 @@ data PacketFlag = Reliable
                 | Unsequenced
                 | NoAllocate
                 | UnreliableFragment
-                | PF_Unused_1
-                | PF_Unused_2
-                | PF_Unused_3
-                | PF_Unused_4
                 | IsSent
-                deriving (Show, Eq, Enum) -- safe because used in bitset
+                | PacketFlagUnknown
+                deriving (Show, Eq)
 
+-- | Used in creation of flag set
+instance Enum PacketFlag where 
+  fromEnum f = case f of 
+    Reliable -> 1
+    Unsequenced -> 2
+    NoAllocate -> 4
+    UnreliableFragment -> 8
+    IsSent -> 256
+    PacketFlagUnknown -> 0
+  toEnum i = case i of 
+    1 -> Reliable
+    2 -> Unsequenced
+    4 -> NoAllocate
+    8 -> UnreliableFragment
+    256 -> IsSent
+    _ -> PacketFlagUnknown
 ------
 
 -- Opaque/Abstract types, cause I am lazy
