@@ -17,6 +17,7 @@ category:            Game
 build-type:          Simple
 cabal-version:       >=1.10
 
+extra-source-files: enet/include/enet/*.h
 
 Bug-reports:          https://github.com/Teaspot-Studio/gore-and-ash-network/issues
 Source-repository head
@@ -51,6 +52,7 @@ library
 
   include-dirs:       enet
                       enet/include
+
 
   build-tools:        hsc2hs
 
