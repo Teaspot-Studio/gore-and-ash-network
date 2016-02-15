@@ -14,10 +14,13 @@ module Game.GoreAndAsh.Network.Module(
     NetworkT(..)
   ) where
 
+import Control.Monad.Base 
 import Control.Monad.Catch
+import Control.Monad.Error.Class 
 import Control.Monad.Extra (whenJust)
 import Control.Monad.Fix
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Resource 
 import Data.Hashable 
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Network.State
@@ -49,8 +52,14 @@ import qualified Network.ENet.Bindings as B
 --
 -- The module is NOT pure within first phase (see 'ModuleStack' docs), therefore currently only 'IO' end monad can handler the module.
 newtype NetworkT s m a = NetworkT { runNetworkT :: StateT (NetworkState s) m a }
-  deriving (Functor, Applicative, Monad, MonadState (NetworkState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask)
+  deriving (Functor, Applicative, Monad, MonadState (NetworkState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask, MonadError e)
 
+instance MonadBase IO m => MonadBase IO (NetworkT s m) where 
+  liftBase = NetworkT . liftBase 
+
+instance MonadResource m => MonadResource (NetworkT s m) where 
+  liftResourceT = NetworkT . liftResourceT
+  
 instance GameModule m s => GameModule (NetworkT s m) (NetworkState s) where
   type ModuleState (NetworkT s m) = NetworkState s
   
