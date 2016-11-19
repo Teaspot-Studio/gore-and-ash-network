@@ -42,9 +42,9 @@ import Network.ENet.Packet as P
 import Network.ENet.Peer
 import Network.Socket (SockAddr)
 import Prelude hiding ((.), id)
-import qualified Data.ByteString as BS 
+import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
-import qualified Data.HashMap.Strict as H 
+import qualified Data.HashMap.Strict as H
 import qualified Data.Sequence as S
 
 -- | Low-level monadic API of the core module
@@ -82,18 +82,18 @@ class (MonadIO m, MonadCatch m) => NetworkMonad m where
   networkSetDetailedLoggingM :: Bool -> m ()
 
   -- | Return count of allocated network channels
-  networkChannels :: m Word 
+  networkChannels :: m Word
 
 instance {-# OVERLAPPING #-} (MonadIO m, MonadCatch m) => NetworkMonad (NetworkT s m) where
   networkBind addr conCount chanCount inBandth outBandth = do
-    nstate <- NetworkT get 
+    nstate <- NetworkT get
     phost <- liftIO $ create addr (fromIntegral conCount) (fromIntegral chanCount) inBandth outBandth
     if phost == nullPtr
-      then case addr of 
-        Nothing -> putMsgLnM "Network: failed to initalize client side"
-        Just a -> putMsgLnM $ "Network: failed to connect to " <> pack (show a)
+      then case addr of
+        Nothing -> putMsgLnM LogError "Network: failed to initalize client side"
+        Just a -> putMsgLnM LogError $ "Network: failed to connect to " <> pack (show a)
       else do
-        when (networkDetailedLogging nstate) $ putMsgLnM $ case addr of 
+        when (networkDetailedLogging nstate) $ putMsgLnM LogInfo $ case addr of
           Nothing -> "Network: client network system initalized"
           Just a -> "Network: binded to " <> pack (show a)
         NetworkT $ put $ nstate {
@@ -101,25 +101,25 @@ instance {-# OVERLAPPING #-} (MonadIO m, MonadCatch m) => NetworkMonad (NetworkT
           , networkMaximumChannels = chanCount
           }
 
-  peersConnectedM = do 
-    NetworkState{..} <- NetworkT get 
+  peersConnectedM = do
+    NetworkState{..} <- NetworkT get
     return networkConnectedPeers
 
-  peersDisconnectedM = do 
-    NetworkState{..} <- NetworkT get 
+  peersDisconnectedM = do
+    NetworkState{..} <- NetworkT get
     return networkDisconnectedPeers
 
-  networkConnect addr chanCount datum = do 
-    nstate <- NetworkT get 
-    case networkHost nstate of 
-      Nothing -> do 
-        putMsgLnM $ "Network: cannot connect to " <> pack (show addr) <> ", system isn't initalized"
+  networkConnect addr chanCount datum = do
+    nstate <- NetworkT get
+    case networkHost nstate of
+      Nothing -> do
+        putMsgLnM LogError $ "Network: cannot connect to " <> pack (show addr) <> ", system isn't initalized"
         return $ Just ()
       Just host -> do
-        peer <- liftIO $ connect host addr (fromIntegral chanCount) datum 
+        peer <- liftIO $ connect host addr (fromIntegral chanCount) datum
         if peer == nullPtr
           then do
-            putMsgLnM $ "Network: failed to connect to " <> pack (show addr)
+            putMsgLnM LogError $ "Network: failed to connect to " <> pack (show addr)
             return Nothing
           else do
             NetworkT . put $! nstate {
@@ -132,59 +132,59 @@ instance {-# OVERLAPPING #-} (MonadIO m, MonadCatch m) => NetworkMonad (NetworkT
     return . fromMaybe S.empty $! H.lookup (peer, ch) msgs
 
   peerSendM peer ch msg = do
-    nstate <- NetworkT get 
-    when (networkDetailedLogging nstate) $ putMsgLnM $ "Network: sending packet via channel "
+    nstate <- NetworkT get
+    when (networkDetailedLogging nstate) $ putMsgLnM LogInfo $ "Network: sending packet via channel "
       <> pack (show ch) <> ", payload: " <> pack (show msg)
     -- IOError
     let sendAction = liftIO $ send peer ch =<< P.poke (messageToPacket msg)
-    catch sendAction $ \(e :: IOException) -> do 
-      putMsgLnM $ "Network: failed to send packet '" <> pack (show e) <> "'"
-    
+    catch sendAction $ \(e :: IOException) -> do
+      putMsgLnM LogError $ "Network: failed to send packet '" <> pack (show e) <> "'"
 
-  networkPeersM = do 
-    NetworkState{..} <- NetworkT get 
+
+  networkPeersM = do
+    NetworkState{..} <- NetworkT get
     return $! networkPeers S.><  networkConnectedPeers
 
-  networkSetDetailedLoggingM f = do 
-    s <- NetworkT get 
+  networkSetDetailedLoggingM f = do
+    s <- NetworkT get
     put $ s { networkDetailedLogging = f }
 
-  networkChannels = do 
-    s <- NetworkT get 
-    return $ networkMaximumChannels s 
+  networkChannels = do
+    s <- NetworkT get
+    return $ networkMaximumChannels s
 
-instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), LoggingMonad m, NetworkMonad m, MonadTrans mt) => NetworkMonad (mt m) where 
+instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), LoggingMonad m, NetworkMonad m, MonadTrans mt) => NetworkMonad (mt m) where
   networkBind a mc mch ib ob = lift $ networkBind a mc mch ib ob
   peersConnectedM = lift peersConnectedM
   peersDisconnectedM = lift peersDisconnectedM
-  networkConnect a b c = lift $ networkConnect a b c 
-  peerMessagesM a b = lift $ peerMessagesM a b 
+  networkConnect a b c = lift $ networkConnect a b c
+  peerMessagesM a b = lift $ peerMessagesM a b
   peerSendM a b c = lift $ peerSendM a b c
   networkPeersM = lift networkPeersM
   networkSetDetailedLoggingM = lift . networkSetDetailedLoggingM
-  networkChannels = lift networkChannels 
-  
+  networkChannels = lift networkChannels
+
 -- | Fires when one or several clients were connected
 peersConnected :: (LoggingMonad m, NetworkMonad m) => GameWire m a (Event (S.Seq Peer))
-peersConnected = mkGen_ $ \_ -> do 
+peersConnected = mkGen_ $ \_ -> do
   ps <- peersConnectedM
-  return $! if S.null ps  
+  return $! if S.null ps
     then Right NoEvent
     else ps `deepseq` Right (Event ps)
 
 -- | Fires when one of connected peers is disconnected for some reason
 peersDisconnected :: (LoggingMonad m, NetworkMonad m) => GameWire m a (Event (S.Seq Peer))
-peersDisconnected = mkGen_ $ \_ -> do 
-  ps <- peersDisconnectedM 
-  return $! if S.null ps  
+peersDisconnected = mkGen_ $ \_ -> do
+  ps <- peersDisconnectedM
+  return $! if S.null ps
     then Right NoEvent
     else ps `deepseq` Right (Event ps)
 
 -- | Fires when statically known peer is disconnected
 peerDisconnected :: (LoggingMonad m, NetworkMonad m) => Peer -> GameWire m a (Event ())
-peerDisconnected p = mkGen_ $ \_ -> do 
-  ps <- peersDisconnectedM 
-  return $! case F.find (p ==) ps of 
+peerDisconnected p = mkGen_ $ \_ -> do
+  ps <- peersDisconnectedM
+  return $! case F.find (p ==) ps of
     Nothing -> Right NoEvent
     Just _ -> Right $! Event ()
 
@@ -193,20 +193,20 @@ currentPeers :: (LoggingMonad m, NetworkMonad m) => GameWire m a (S.Seq Peer)
 currentPeers = liftGameMonad networkPeersM
 
 -- | Returns sequence of packets that were recieved during last frame from given peer and channel id
-peerMessages :: (LoggingMonad m, NetworkMonad m) => Peer -> ChannelID -> GameWire m a (Event (S.Seq BS.ByteString)) 
-peerMessages p ch = mkGen_ $ \_ -> do 
+peerMessages :: (LoggingMonad m, NetworkMonad m) => Peer -> ChannelID -> GameWire m a (Event (S.Seq BS.ByteString))
+peerMessages p ch = mkGen_ $ \_ -> do
   msgs <- peerMessagesM p ch
-  return $! if S.null msgs 
+  return $! if S.null msgs
     then Right NoEvent
     else msgs `deepseq` Right (Event msgs)
 
 -- | Send message to given peer with given channel id
 peerSend :: (LoggingMonad m, NetworkMonad m) => Peer -> ChannelID -> GameWire m (Event Message) (Event ())
-peerSend peer chid = liftGameMonadEvent1 $ peerSendM peer chid 
+peerSend peer chid = liftGameMonadEvent1 $ peerSendM peer chid
 
 -- | Send several messages to given peer with given channel id
 peerSendMany :: (LoggingMonad m, NetworkMonad m, F.Foldable t) => Peer -> ChannelID -> GameWire m (Event (t Message)) (Event ())
-peerSendMany peer chid = liftGameMonadEvent1 $ mapM_ (peerSendM peer chid) 
+peerSendMany peer chid = liftGameMonadEvent1 $ mapM_ (peerSendM peer chid)
 
 -- | Sometimes you want to listen all peers and use statefull computations at the same time.
 --
@@ -219,7 +219,7 @@ onPeers w = switch $ proc _ -> do -- Trick to immediate switch to current set of
   epeers <- now . currentPeers -< ()
   returnA -< (error "onPeers: impossible", go <$> epeers)
   where
-  go initalPeers = proc a -> do 
+  go initalPeers = proc a -> do
     conEvent <- peersConnected -< ()
     disEvent <- peersDisconnected -< ()
 
@@ -233,6 +233,6 @@ onPeers w = switch $ proc _ -> do -- Trick to immediate switch to current set of
     returnA -< b
     where
       listenPeers :: S.Seq Peer -> GameWire m a (S.Seq Peer, b)
-      listenPeers peers = proc a -> do 
-        b <- w peers -< a 
+      listenPeers peers = proc a -> do
+        b <- w peers -< a
         returnA -< (peers, b)
