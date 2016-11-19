@@ -6,9 +6,9 @@ resolver: lts-7.9
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
-- location:
-    git: https://github.com/Teaspot-Studio/gore-and-ash-logging
-    commit: d535d99c83c2c8999afe6aadc015a572ebb023db
+#- location:
+#    git: https://github.com/Teaspot-Studio/gore-and-ash-logging
+#    commit: d535d99c83c2c8999afe6aadc015a572ebb023db
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
