@@ -1,4 +1,7 @@
-FROM phadej/ghc:7.10.2 
+FROM haskell:8.0.1
+
+RUN apt-get update
+RUN apt-get install -y curl
 
 ADD mkdocs /opt/project/
 ADD LICENSE /opt/project/
