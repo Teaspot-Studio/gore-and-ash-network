@@ -13,8 +13,8 @@ packages:
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
 - typesafe-endian-0.1.0.1
-- gore-and-ash-logging-2.0.1.0
-- gore-and-ash-1.2.2.0
+- gore-and-ash-logging-3.0.0.0
+- gore-and-ash-2.0.0.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}

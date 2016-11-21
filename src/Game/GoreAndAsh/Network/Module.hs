@@ -14,63 +14,71 @@ module Game.GoreAndAsh.Network.Module(
     NetworkT(..)
   ) where
 
-import Control.Monad.Base 
+import Control.Monad.Base
 import Control.Monad.Catch
-import Control.Monad.Error.Class 
+import Control.Monad.Error.Class
 import Control.Monad.Extra (whenJust)
 import Control.Monad.Fix
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Resource 
-import Data.Hashable 
+import Control.Monad.Trans.Resource
+import Data.Hashable
+import Data.Proxy
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Network.State
 import Network.ENet
-import Network.ENet.Host 
+import Network.ENet.Host
 import Network.ENet.Packet (peek)
-import Network.ENet.Peer 
-import qualified Data.Foldable as F 
-import qualified Data.HashMap.Strict as H 
+import Network.ENet.Peer
+import qualified Data.Foldable as F
+import qualified Data.HashMap.Strict as H
 import qualified Data.Sequence as S
-import qualified Network.ENet.Bindings as B 
+import qualified Network.ENet.Bindings as B
 
 -- | Monad transformer of network core module.
---
--- [@s@] - State of next core module in modules chain;
 --
 -- [@m@] - Next monad in modules monad stack;
 --
 -- [@a@] - Type of result value;
 --
 -- How to embed module:
--- 
--- @
--- type AppStack = ModuleStack [LoggingT, NetworkT, ... other modules ... ] IO
 --
--- newtype AppMonad a = AppMonad (AppStack a)
+-- @
+-- newtype AppMonad t a = AppMonad (LoggingT (NetworkT (GameMonad t)) a)
 --   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
 -- @
---
--- The module is NOT pure within first phase (see 'ModuleStack' docs), therefore currently only 'IO' end monad can handler the module.
-newtype NetworkT s m a = NetworkT { runNetworkT :: StateT (NetworkState s) m a }
-  deriving (Functor, Applicative, Monad, MonadState (NetworkState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask, MonadError e)
+newtype NetworkT m a = NetworkT { runNetworkT :: StateT NetworkState m a }
+  deriving (Functor, Applicative, Monad, MonadState NetworkState, MonadFix
+    , MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask, MonadError e
+    , MonadSample t, MonadHold t)
 
-instance MonadBase IO m => MonadBase IO (NetworkT s m) where 
-  liftBase = NetworkT . liftBase 
+instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (NetworkT m) where
+  newEventWithTrigger = lift . newEventWithTrigger
+  newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
 
-instance MonadResource m => MonadResource (NetworkT s m) where 
+instance MonadAppHost t m => MonadAppHost t (NetworkT m) where
+  getFireAsync = lift getFireAsync
+  getRunAppHost = do
+    runner <- NetworkT getRunAppHost
+    return $ \m -> runner $ runNetworkT m
+  performPostBuild_ = lift . performPostBuild_
+  liftHostFrame = lift . liftHostFrame
+
+instance MonadBase IO m => MonadBase IO (NetworkT s m) where
+  liftBase = NetworkT . liftBase
+
+instance MonadResource m => MonadResource (NetworkT s m) where
   liftResourceT = NetworkT . liftResourceT
-  
-instance GameModule m s => GameModule (NetworkT s m) (NetworkState s) where
-  type ModuleState (NetworkT s m) = NetworkState s
-  
-  runModule (NetworkT m) s = do 
+
+instance GameModule t m => GameModule t (NetworkT m) where
+
+  runModule (NetworkT m) s = do
     ((a, s'), nextState) <- runModule (runStateT m s) (networkNextState s)
     s'' <- processEvents <=< clearMessages <=< moveDisconnected <=< moveConnected $ s'
     return (a, s'' {
         networkNextState = nextState
       })
-    where 
-      processEvents s' = case networkHost s' of 
+    where
+      processEvents s' = case networkHost s' of
         Nothing -> return s'
         Just h -> processNetEvents s' h
 
@@ -88,27 +96,26 @@ instance GameModule m s => GameModule (NetworkT s m) (NetworkState s) where
           networkMessages = H.empty
         }
 
-  newModuleState = do 
-    s <- newModuleState 
-    return $ emptyNetworkState s
+  withModule t _ = withENetDo . withModule t (Proxy :: Proxy m)
 
-  withModule _ = withENetDo
-  cleanupModule NetworkState{..} = do 
-    forM_ networkPeers $ \p -> disconnectNow p 0
-    forM_ networkConnectedPeers $ \p -> disconnectNow p 0
-    whenJust networkHost destroy
- 
+-- | Safe cleanup of network system
+cleanupModule :: NetworkState -> IO ()
+cleanupModule NetworkState{..} = do
+  forM_ networkPeers $ \p -> disconnectNow p 0
+  forM_ networkConnectedPeers $ \p -> disconnectNow p 0
+  whenJust networkHost destroy
+
 -- | Deletes all elements from second sequence that are in first sequence O(n^2)
 remAllFromSeq :: (Eq k, Hashable k) => S.Seq k -> S.Seq k -> S.Seq k
-remAllFromSeq s m = F.foldl' (\acc a -> S.filter (/= a) acc) m s 
+remAllFromSeq s m = F.foldl' (\acc a -> S.filter (/= a) acc) m s
 
 -- | Poll all events from ENet
-processNetEvents :: MonadIO m => NetworkState s -> Host -> m (NetworkState s)
+processNetEvents :: MonadIO m => NetworkState -> Host -> m NetworkState
 processNetEvents nst hst = liftIO $ untilNothing nst (service hst 0) handleEvent
   where
-    untilNothing acc f h = do 
-      ma <- f 
-      case ma of 
+    untilNothing acc f h = do
+      ma <- f
+      case ma of
         Nothing -> return acc
         Just a -> do
           acc' <- h acc a
@@ -118,17 +125,17 @@ processNetEvents nst hst = liftIO $ untilNothing nst (service hst 0) handleEvent
       B.None -> do
         when networkDetailedLogging $ putStrLn "Network: Event none"
         return s
-      B.Connect -> do 
+      B.Connect -> do
         when networkDetailedLogging $ putStrLn "Network: Peer connected"
         return $ s {
             networkConnectedPeers = networkConnectedPeers S.|> peer
           }
-      B.Disconnect -> do 
+      B.Disconnect -> do
         when networkDetailedLogging $ putStrLn $ "Network: Peer disconnected, code " ++ show edata
         return $ s {
             networkDisconnectedPeers = networkDisconnectedPeers S.|> peer
           }
-      B.Receive -> do 
+      B.Receive -> do
         (Packet !fs !bs) <- peek packetPtr
         when networkDetailedLogging $ putStrLn $ "Network: Received message at channel " ++ show ch ++ ": "
           ++ show fs ++ ", payload: " ++ show bs
