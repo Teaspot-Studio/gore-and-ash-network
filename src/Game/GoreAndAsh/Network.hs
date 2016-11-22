@@ -28,20 +28,20 @@ type AppStack = ModuleStack [LoggingT, NetworkT, ... other modules ... ] IO
 newtype AppState = AppState (ModuleState AppStack)
   deriving (Generic)
 
-instance NFData AppState 
+instance NFData AppState
 
 -- | Wrapper around type family
 newtype AppMonad a = AppMonad (AppStack a)
   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, MonadThrow, MonadCatch, LoggingMonad, NetworkMonad, ... other modules monads ... )
-  
-instance GameModule AppMonad AppState where 
+
+instance GameModule AppMonad AppState where
   type ModuleState AppMonad = AppState
-  runModule (AppMonad m) (AppState s) = do 
-    (a, s') <- runModule m s 
+  runModule (AppMonad m) (AppState s) = do
+    (a, s') <- runModule m s
     return (a, AppState s')
   newModuleState = AppState <$> newModuleState
   withModule _ = withModule (Proxy :: Proxy AppStack)
-  cleanupModule (AppState s) = cleanupModule s 
+  cleanupModule (AppState s) = cleanupModule s
 
 -- | Arrow that is build over the monad stack
 type AppWire a b = GameWire AppMonad a b
@@ -54,7 +54,7 @@ module Game.GoreAndAsh.Network(
   , Host
   , Peer
   , ChannelID(..)
-  , NetworkT 
+  , NetworkT
   , NetworkMonad(..)
   , Message(..)
   , MessageType(..)
@@ -73,9 +73,11 @@ module Game.GoreAndAsh.Network(
 
 -- imports for docs
 import Game.GoreAndAsh.Core
-import Game.GoreAndAsh.Logging 
+import Game.GoreAndAsh.Logging
 
 import Game.GoreAndAsh.Network.API as X
+import Game.GoreAndAsh.Network.Error as X
 import Game.GoreAndAsh.Network.Message as X
 import Game.GoreAndAsh.Network.Module as X
+import Game.GoreAndAsh.Network.Options as X
 import Game.GoreAndAsh.Network.State as X

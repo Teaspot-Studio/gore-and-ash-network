@@ -34,8 +34,10 @@ library
   exposed-modules:
     Game.GoreAndAsh.Network
     Game.GoreAndAsh.Network.API
+    Game.GoreAndAsh.Network.Error
     Game.GoreAndAsh.Network.Message
     Game.GoreAndAsh.Network.Module
+    Game.GoreAndAsh.Network.Options
     Game.GoreAndAsh.Network.State
   other-modules:
     Network.ENet
