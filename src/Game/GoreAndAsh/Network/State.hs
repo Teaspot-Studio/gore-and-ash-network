@@ -15,6 +15,7 @@ module Game.GoreAndAsh.Network.State(
   -- * State
   , NetworkState(..)
   , newNetworkState
+  , MessageEventPayload
   ) where
 
 import Control.DeepSeq
@@ -24,6 +25,7 @@ import GHC.Generics (Generic)
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Network.Options
 
+import qualified Data.ByteString as BS
 import qualified Data.Sequence as S
 import qualified Network.ENet.Bindings as B
 
@@ -31,6 +33,9 @@ import qualified Network.ENet.Bindings as B
 type Host = Ptr B.Host
 -- | Remote endpoint
 type Peer = Ptr B.Peer
+
+-- | Holds peer the message come from, channel id and payload.
+type MessageEventPayload = (Peer, B.ChannelID, BS.ByteString)
 
 -- | Inner state of network layer
 --
@@ -45,19 +50,29 @@ data NetworkState t = NetworkState {
 , networkPeers :: !(ExternalRef t (S.Seq Peer))
   -- | Store connection options that were used to create the state.
 , networkOptions :: !(NetworkOptions ())
+  -- | Event about incomming network message. Holds peer the message come from,
+  -- channel id and payload.
+, networkMessageEvent :: !(Event t MessageEventPayload)
 } deriving (Generic)
 
-instance NFData (NetworkState t)
+instance NFData (NetworkState t) where
+  rnf NetworkState{..} = networkHost `seq`
+    networkPeers `seq`
+    networkOptions `deepseq`
+    networkMessageEvent `seq`
+    ()
 
 -- | Creates initial state
 newNetworkState :: MonadAppHost t m
   => NetworkOptions s -- ^ Initialisation options
+  -> Event t MessageEventPayload -- ^ Event that fires when a network message arrives
   -> m (NetworkState t)
-newNetworkState opts = do
+newNetworkState opts msgE = do
   host <- newExternalRef Nothing
   peers <- newExternalRef mempty
   return NetworkState {
       networkHost = host
     , networkPeers = peers
     , networkOptions = opts { networkNextOptions = () }
+    , networkMessageEvent = msgE
     }

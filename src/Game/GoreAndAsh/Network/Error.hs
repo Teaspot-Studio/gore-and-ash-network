@@ -13,6 +13,15 @@ module Game.GoreAndAsh.Network.Error(
   , renderNetworkError
   ) where
 
+import Data.Monoid
+import Network.Socket (SockAddr)
+
+import qualified Network.ENet.Bindings as B
+
+import Game.GoreAndAsh.Logging
+import Game.GoreAndAsh.Network.State
+import Game.GoreAndAsh.Network.Message
+
 -- | Error that can be raised in network module
 data NetworkError =
     NetworkInitFail -- ^ Failed to initialise network host

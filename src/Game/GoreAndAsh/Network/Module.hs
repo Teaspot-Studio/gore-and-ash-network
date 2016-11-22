@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 {-|
 Module      : Game.GoreAndAsh.Network.Module
@@ -12,27 +13,32 @@ The module contains declaration of module monad transformer and instance of 'Gam
 -}
 module Game.GoreAndAsh.Network.Module(
     NetworkT(..)
+  -- * Helpers
+  , networkBind
+  , networkConnect
+  , disconnectAll
   ) where
 
 import Control.Monad.Base
 import Control.Monad.Catch
 import Control.Monad.Except
-import Control.Monad.Extra (whenJust)
-import Control.Monad.Fix
 import Control.Monad.Reader
 import Control.Monad.Trans.Resource
-import Data.Hashable
+import Data.Monoid
 import Data.Proxy
+import Data.Word
+import Foreign (nullPtr)
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
+import Game.GoreAndAsh.Network.Error
+import Game.GoreAndAsh.Network.Options
 import Game.GoreAndAsh.Network.State
 import Network.ENet
 import Network.ENet.Host
 import Network.ENet.Packet (peek)
 import Network.ENet.Peer
+import Network.Socket (SockAddr)
 
-import qualified Data.Foldable as F
-import qualified Data.HashMap.Strict as H
 import qualified Data.Sequence as S
 import qualified Network.ENet.Bindings as B
 
@@ -74,95 +80,74 @@ instance MonadBase IO m => MonadBase IO (NetworkT t m) where
 instance MonadResource m => MonadResource (NetworkT t m) where
   liftResourceT = NetworkT . liftResourceT
 
-instance GameModule t m => GameModule t (NetworkT t m) where
+-- | Action that fires event about incoming message
+type MessageEventFire = MessageEventPayload -> IO Bool
+
+instance (MonadIO (HostFrame t), GameModule t m) => GameModule t (NetworkT t m) where
   type ModuleOptions t (NetworkT t m) = NetworkOptions (ModuleOptions t m)
 
   runModule opts m = do
-    s <- processErrors $ newNetworkState opts
+    (messageE, messageFire) <- newExternalEvent
+    s <- newNetworkState opts messageE
     a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m) s)
+    processNetEvents s messageFire
     return a
-
-    -- ((a, s'), nextState) <- runModule (runStateT m s) (networkNextState s)
-    -- s'' <- processEvents <=< clearMessages <=< moveDisconnected <=< moveConnected $ s'
-    -- return (a, s'' {
-    --     networkNextState = nextState
-    --   })
-    where
-      processErrors m = do
-        res <- runExceptT m
-        case res of
-          Left er -> do
-            let msg = renderNetworkError er
-            logMsgMLn LogError msg
-            fail $ show er
-          Right v -> return v
-
-    --   processEvents s' = case networkHost s' of
-    --     Nothing -> return s'
-    --     Just h -> processNetEvents s' h
-
-    --   moveConnected s' = return $ s' {
-    --       networkPeers = networkPeers s' S.>< networkConnectedPeers s'
-    --     , networkConnectedPeers = S.empty
-    --     }
-
-    --   moveDisconnected s' = return $ s' {
-    --       networkPeers = remAllFromSeq (networkDisconnectedPeers s') (networkPeers s')
-    --     , networkDisconnectedPeers = S.empty
-    --     }
-
-    --   clearMessages s' = return $ s' {
-    --       networkMessages = H.empty
-    --     }
 
   withModule t _ = withENetDo . withModule t (Proxy :: Proxy m)
 
--- -- | Safe cleanup of network system
--- cleanupModule :: NetworkState -> IO ()
--- cleanupModule NetworkState{..} = do
---   forM_ networkPeers $ \p -> disconnectNow p 0
---   forM_ networkConnectedPeers $ \p -> disconnectNow p 0
---   whenJust networkHost destroy
+-- | Terminate all connections and destroy host object
+disconnectAll :: MonadAppHost t m => NetworkState t -> m ()
+disconnectAll NetworkState{..} = do
+  modifyExternalRefM networkPeers $ \peers -> do
+    forM_ peers $ \p -> liftIO $ disconnectNow p 0
+    return (mempty, ())
 
--- -- | Deletes all elements from second sequence that are in first sequence O(n^2)
--- remAllFromSeq :: (Eq k, Hashable k) => S.Seq k -> S.Seq k -> S.Seq k
--- remAllFromSeq s m = F.foldl' (\acc a -> S.filter (/= a) acc) m s
+  modifyExternalRefM networkHost $ \case
+    Nothing -> return (Nothing, ())
+    Just host -> do
+      liftIO $ destroy host
+      return (Nothing, ())
 
--- -- | Poll all events from ENet
--- processNetEvents :: MonadIO m => NetworkState -> Host -> m NetworkState
--- processNetEvents nst hst = liftIO $ untilNothing nst (service hst 0) handleEvent
---   where
---     untilNothing acc f h = do
---       ma <- f
---       case ma of
---         Nothing -> return acc
---         Just a -> do
---           acc' <- h acc a
---           untilNothing acc' f h
+-- | Poll all events from ENet, does nothing when system doesn't have any initiated host object
+processNetEvents :: forall t m . MonadAppHost t m
+  => NetworkState t -- ^ Context that holds reference with host
+  -> MessageEventFire -- ^ Action that fires event about incoming message
+  -> m ()
+processNetEvents NetworkState{..} msgFire = do
+  _ <- holdAppHost (return ()) $ ffor (externalEvent networkHost) $ \case
+    Nothing -> return ()
+    Just host -> handleEvents host
+  return ()
+  where
+    handleEvents :: Host -> m ()
+    handleEvents host = untilNothing (service host 0) handleEvent
 
---     handleEvent s@NetworkState{..} (B.Event et peer ch edata packetPtr) = case et of
---       B.None -> do
---         when networkDetailedLogging $ putStrLn "Network: Event none"
---         return s
---       B.Connect -> do
---         when networkDetailedLogging $ putStrLn "Network: Peer connected"
---         return $ s {
---             networkConnectedPeers = networkConnectedPeers S.|> peer
---           }
---       B.Disconnect -> do
---         when networkDetailedLogging $ putStrLn $ "Network: Peer disconnected, code " ++ show edata
---         return $ s {
---             networkDisconnectedPeers = networkDisconnectedPeers S.|> peer
---           }
---       B.Receive -> do
---         (Packet !fs !bs) <- peek packetPtr
---         when networkDetailedLogging $ putStrLn $ "Network: Received message at channel " ++ show ch ++ ": "
---           ++ show fs ++ ", payload: " ++ show bs
---         return $ s {
---             networkMessages = case H.lookup (peer, ch) networkMessages of
---               Nothing -> H.insert (peer, ch) (S.singleton bs) networkMessages
---               Just msgs -> H.insert (peer, ch) (msgs S.|> bs) networkMessages
---           }
+    handleEvent :: B.Event -> m ()
+    handleEvent (B.Event et peer ch edata packetPtr) = case et of
+      B.None -> detailLog "Network: Event none"
+      B.Connect -> do
+        detailLog "Network: Peer connected"
+        modifyExternalRef networkPeers $ \ps -> (ps S.|> peer, ())
+      B.Disconnect -> do
+        detailLog $ "Network: Peer disconnected, code " <> show edata
+        modifyExternalRef networkPeers $ \ps -> (S.filter (/= peer) ps, ())
+      B.Receive -> do
+        (Packet !fs !bs) <- liftIO $ peek packetPtr
+        detailLog $ "Network: Received message at channel " <> show ch <> ": "
+          <> show fs <> ", payload: " <> show bs
+        _ <- liftIO $ msgFire (peer, ch, bs)
+        return ()
+
+    detailLog = when (networkDetailedLogging networkOptions) . liftIO . putStrLn
+
+    untilNothing :: IO (Maybe a) -> (a -> m ()) -> m ()
+    untilNothing f h = do
+      ma <- liftIO f
+      case ma of
+        Nothing -> return ()
+        Just a -> do
+          h a
+          untilNothing f h
 
 -- | Initialise network system and create host
 networkBind :: (LoggingMonad t m, MonadError NetworkError m)
