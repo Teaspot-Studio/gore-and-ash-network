@@ -44,6 +44,8 @@ import qualified Network.ENet.Bindings as B
 
 -- | Monad transformer of network core module.
 --
+-- [@t@] - FRP engine implementation, can be ignored almost everywhere.
+--
 -- [@m@] - Next monad in modules monad stack;
 --
 -- [@a@] - Type of result value;
@@ -51,7 +53,7 @@ import qualified Network.ENet.Bindings as B
 -- How to embed module:
 --
 -- @
--- newtype AppMonad t a = AppMonad (LoggingT (NetworkT (GameMonad t)) a)
+-- newtype AppMonad t a = AppMonad (LoggingT (NetworkT t (GameMonad t)) a)
 --   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
 -- @
 newtype NetworkT t m a = NetworkT { runNetworkT :: ReaderT (NetworkState t) m a }
