@@ -13,6 +13,7 @@ module Game.GoreAndAsh.Network.Error(
   , renderNetworkError
   ) where
 
+import Control.Exception
 import Data.Monoid
 import Network.Socket (SockAddr)
 
@@ -27,6 +28,9 @@ data NetworkError =
     NetworkInitFail -- ^ Failed to initialise network host
   | NetworkConnectFail SockAddr -- ^ Failed to connect to remote server
   | NetworkSendFail Peer B.ChannelID Message -- ^ Failed to send message
+  deriving (Show)
+
+instance Exception NetworkError
 
 -- | Make human readable description of network error
 renderNetworkError :: NetworkError -> LogStr

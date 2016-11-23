@@ -12,10 +12,18 @@ module Game.GoreAndAsh.Network.State(
   -- * Types
     Host
   , Peer
-  -- * State
-  , NetworkState(..)
-  , newNetworkState
   , MessageEventPayload
+  -- * State
+  , NetworkState
+  , networkStateHost
+  , networkStateServer
+  , networkStatePeerConnect
+  , newtorkStatePeerDisconnect
+  , networkStatePeerDisconnectFire
+  , networkStateOptions
+  , networkStateMessageEvent
+  , networkStateMaxChannels
+  , newNetworkState
   ) where
 
 import Control.DeepSeq
@@ -26,7 +34,6 @@ import Game.GoreAndAsh
 import Game.GoreAndAsh.Network.Options
 
 import qualified Data.ByteString as BS
-import qualified Data.Sequence as S
 import qualified Network.ENet.Bindings as B
 
 -- | Local endpoint
@@ -45,34 +52,54 @@ data NetworkState t = NetworkState {
   -- or local client is connected to remote server.
   --
   -- Note that host is create both for clients and servers.
-  networkHost :: !(ExternalRef t (Maybe Host))
-  -- | Stored information of connected peers for the local server.
-, networkPeers :: !(ExternalRef t (S.Seq Peer))
+  networkStateHost :: !(ExternalRef t (Maybe Host))
+  -- | Stored information about connection to server. Used by client.
+, networkStateServer :: !(ExternalRef t (Maybe Peer))
+  -- | Fires when a new peer is connected
+, networkStatePeerConnect :: !(Event t Peer)
+  -- | Fires when a peer is disconnected
+, newtorkStatePeerDisconnect :: !(Event t Peer)
+  -- | Action that fires event about peer disconnection
+, networkStatePeerDisconnectFire :: !(Peer -> IO Bool)
   -- | Store connection options that were used to create the state.
-, networkOptions :: !(NetworkOptions ())
+, networkStateOptions :: !(NetworkOptions ())
   -- | Event about incomming network message. Holds peer the message come from,
   -- channel id and payload.
-, networkMessageEvent :: !(Event t MessageEventPayload)
+, networkStateMessageEvent :: !(Event t MessageEventPayload)
+  -- | Store current number of channels
+, networkStateMaxChannels :: !(ExternalRef t Word)
 } deriving (Generic)
 
 instance NFData (NetworkState t) where
-  rnf NetworkState{..} = networkHost `seq`
-    networkPeers `seq`
-    networkOptions `deepseq`
-    networkMessageEvent `seq`
+  rnf NetworkState{..} = networkStateHost `seq`
+    networkStatePeerConnect `seq`
+    newtorkStatePeerDisconnect `seq`
+    networkStatePeerDisconnectFire `seq`
+    networkStateServer `seq`
+    networkStateOptions `deepseq`
+    networkStateMessageEvent `seq`
+    networkStateMaxChannels `seq`
     ()
 
 -- | Creates initial state
 newNetworkState :: MonadAppHost t m
   => NetworkOptions s -- ^ Initialisation options
   -> Event t MessageEventPayload -- ^ Event that fires when a network message arrives
+  -> Event t Peer -- ^ Connection event
+  -> Event t Peer -- ^ Disconnection event
+  -> (Peer -> IO Bool) -- | Action that fires event about peer disconnection
   -> m (NetworkState t)
-newNetworkState opts msgE = do
+newNetworkState opts msgE peerConn peerDisconn fireDisconnect = do
   host <- newExternalRef Nothing
-  peers <- newExternalRef mempty
+  serv <- newExternalRef Nothing
+  maxchans <- newExternalRef 0
   return NetworkState {
-      networkHost = host
-    , networkPeers = peers
-    , networkOptions = opts { networkNextOptions = () }
-    , networkMessageEvent = msgE
+      networkStateHost = host
+    , networkStateServer = serv
+    , networkStatePeerConnect = peerConn
+    , newtorkStatePeerDisconnect = peerDisconn
+    , networkStatePeerDisconnectFire = fireDisconnect
+    , networkStateOptions = opts { networkNextOptions = () }
+    , networkStateMessageEvent = msgE
+    , networkStateMaxChannels = maxchans
     }

@@ -49,26 +49,32 @@ type AppWire a b = GameWire AppMonad a b
 
 -}
 module Game.GoreAndAsh.Network(
-  -- * Low-level API
-    NetworkState
-  , Host
+  -- * Types
+    Host
   , Peer
-  , ChannelID(..)
   , NetworkT
-  , NetworkMonad(..)
+  -- ** Options
+  , NetworkOptions
+  , defaultNetworkOptions
+  , networkChannelsCount
+  , networkIncomingBandwidth
+  , networkOutcomingBandwidth
+  , networkDetailedLogging
+  , networkNextOptions
+  -- ** Errors
+  , NetworkError(..)
+  , renderNetworkError
+  -- ** Messages
   , Message(..)
   , MessageType(..)
-  -- * Arrow API
-  -- ** Peer handling
-  , peersConnected
-  , peersDisconnected
-  , peerDisconnected
-  , currentPeers
-  , onPeers
-  -- ** Messaging support
-  , peerMessages
-  , peerSend
-  , peerSendMany
+  , messageToPacket
+  -- * Network API
+  , NetworkMonad(..)
+  , connected
+  , disconnected
+  , peerSend'
+  , peerSend''
+  , terminateNetwork
   ) where
 
 -- imports for docs
