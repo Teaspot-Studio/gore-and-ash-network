@@ -70,8 +70,8 @@ module Game.GoreAndAsh.Network(
   , messageToPacket
   -- * Network API
   , NetworkMonad(..)
-  , connected
-  , disconnected
+  , ServerListen(..)
+  , ClientConnect(..)
   , peerSend'
   , peerSend''
   , terminateNetwork

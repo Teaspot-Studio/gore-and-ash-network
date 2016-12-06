@@ -13,55 +13,56 @@ The module contains monadic and arrow API of network core module.
 module Game.GoreAndAsh.Network.API(
   -- * Network API
     NetworkMonad(..)
-  , connected
-  , disconnected
+  , ServerListen(..)
+  , ClientConnect(..)
   , peerSend'
   , peerSend''
   , terminateNetwork
   ) where
 
-import Control.Exception.Base (IOException)
 import Control.Monad.Catch
 import Control.Monad.Except
-import Control.Monad.Reader
-import Data.Align
-import Data.Monoid
-import Data.These
 import Foreign
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network.Error
 import Game.GoreAndAsh.Network.Message
-import Game.GoreAndAsh.Network.Module
-import Game.GoreAndAsh.Network.Options
 import Game.GoreAndAsh.Network.State
+import GHC.Generics
 import Network.ENet.Bindings (ChannelID)
-import Network.ENet.Host
 import Network.Socket (SockAddr)
 
 import qualified Data.ByteString as BS
 import qualified Data.Sequence as S
-import qualified Network.ENet.Packet as P
-import qualified Network.ENet.Peer as P
+
+-- | Parameters for 'serverListen'
+data ServerListen = ServerListen {
+  listenAddress   :: !SockAddr -- ^ Address to listen, can be '0.0.0.0'
+, listenMaxConns  :: !Word -- ^ Maximum count of connections
+, listenChanns    :: !Word -- ^ Number of channels to open
+, listenIncoming  :: !Word32 -- ^ Incoming max bandwidth
+, listenOutcoming :: !Word32 -- ^ Outcoming max bandwidth
+} deriving (Generic)
+
+-- | Parameters for 'clientConnect'
+data ClientConnect = ClientConnect {
+  clientAddrr     :: !SockAddr -- ^ Address of host
+, clientChanns    :: !Word -- ^ Count of channels to open
+, clientIncoming  :: !Word32 -- ^ Incoming max bandwidth
+, clientOutcoming :: !Word32 -- ^ Outcoming max bandwidth
+} deriving (Generic)
 
 -- | API of the network module
-class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m) => NetworkMonad t m | m -> t where
+class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m, MonadError NetworkError m) => NetworkMonad t m | m -> t where
   -- | Start listening for messages, initialise internal host object
-  serverListen :: (LoggingMonad t m, MonadError NetworkError m)
-    => SockAddr -- ^ Address to listen, can be '0.0.0.0'
-    -> Word -- ^ Maximum count of connections
-    -> Word -- ^ Number of channels to open
-    -> Word32 -- ^ Incoming max bandwidth
-    -> Word32 -- ^ Outcoming max bandwidth
-    -> m ()
+  serverListen :: LoggingMonad t m
+    => Event t ServerListen -- ^ Input parameters
+    -> m (Event t (Either NetworkError ()))
 
   -- | Initiate connection to the remote host
-  clientConnect :: (LoggingMonad t m, MonadError NetworkError m)
-    => SockAddr -- ^ Address of host
-    -> Word -- ^ Count of channels to open
-    -> Word32 -- ^ Incoming max bandwidth
-    -> Word32 -- ^ Outcoming max bandwidth
-    -> m ()
+  clientConnect :: LoggingMonad t m
+    => Event t ClientConnect -- ^ Input parameters
+    -> m (Event t (Either NetworkError ()))
 
   -- | Connection to remote server (client side). Server side value is always 'Nothing'
   serverPeer :: m (Dynamic t (Maybe Peer))
@@ -106,92 +107,19 @@ class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m) => NetworkM
   -- | Terminate local host object, terminates network module
   terminateHost :: m ()
 
-instance {-# OVERLAPPING #-} (MonadIO m, MonadCatch m, MonadAppHost t m) => NetworkMonad t (NetworkT t m) where
-  serverListen addr conCount chanCount inBandth outBandth = do
-    st <- ask
-    let detailed = networkDetailedLogging $ networkStateOptions st
-    host <- networkBind (Just addr) conCount chanCount inBandth outBandth detailed
-    writeExternalRef (networkStateHost st) (Just host)
-  {-# INLINE serverListen #-}
+  -- | Return collection of connected peers
+  networkPeers :: m (Dynamic t (S.Seq Peer))
 
-  clientConnect addr chanCount inBandth outBandth = do
-    st <- ask
-    let detailed = networkDetailedLogging $ networkStateOptions st
-    host <- networkBind Nothing 1 chanCount inBandth outBandth detailed
-    serv <- networkConnect host addr chanCount 0 detailed
-    writeExternalRef (networkStateServer st) (Just serv)
-  {-# INLINE clientConnect #-}
+  -- | Fires when is connected to remote server
+  connected :: m (Event t Peer)
 
-  serverPeer = externalRefDynamic =<< asks networkStateServer
-  {-# INLINE serverPeer #-}
-
-  peerConnected = asks networkStatePeerConnect
-  {-# INLINE peerConnected #-}
-
-  peerDisconnected = asks newtorkStatePeerDisconnect
-  {-# INLINE peerDisconnected #-}
-
-  disconnect e = do
-    peers <- networkPeers
-    performAppHost $ ffor e $ const $ do
-      mapM_ disconnectPeerM =<< sample (current peers)
-      disconnectFromServerM
-  {-# INLINE disconnect #-}
-
-  disconnectPeerM peer = do
-    st <- ask
-    liftIO $ do
-      P.disconnect peer 0
-      _ <- networkStatePeerDisconnectFire st peer
-      return ()
-  {-# INLINE disconnectPeerM #-}
-
-  disconnectPeer e = performAppHost $ fmap disconnectPeerM e
-  {-# INLINE disconnectPeer #-}
-
-  disconnectFromServerM = do
-    st <- ask
-    modifyExternalRefM (networkStateServer st) $ \case
-      Nothing -> return (Nothing, ())
-      Just serv -> do
-        liftIO $ P.disconnectNow serv 0
-        return (Nothing, ())
-  {-# INLINE disconnectFromServerM #-}
-
-  disconnectFromServer = performAppHost . fmap (const disconnectFromServerM)
-  {-# INLINE disconnectFromServer #-}
-
-  networkMessage = asks networkStateMessageEvent
-  {-# INLINE networkMessage #-}
-
-  peerSendM peer chan msg = do
-    detailed <- asks (networkDetailedLogging . networkStateOptions)
-    when detailed $ logMsgMLn LogInfo $ "Network: sending packet via channel "
-       <> showl chan <> ", payload: " <> showl msg
-    let sendAction = liftIO $ P.send peer chan =<< P.poke (messageToPacket msg)
-    catch sendAction $ \(e :: IOException) -> do
-      logMsgMLn LogError $ "Network: failed to send packet '" <> showl e <> "'"
-  {-# INLINE peerSendM #-}
-
-  peerSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> peerSendM peer chan msg
-  {-# INLINE peerSend #-}
-
-  networkChannels = externalRefDynamic =<< asks networkStateMaxChannels
-  {-# INLINE networkChannels #-}
-
-  terminateHost = do
-    st <- ask
-    modifyExternalRefM (networkStateHost st) $ \case
-      Nothing -> return (Nothing, ())
-      Just host -> do
-        liftIO $ destroy host
-        return (Nothing, ())
-  {-# INLINE terminateHost #-}
+  -- | Fires when is disconnected from remote server
+  disconnected :: m (Event t ())
 
 -- | Automatic lifting across monad stack
-instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt, MonadError NetworkError m) => NetworkMonad t (mt m) where
-  serverListen addr conCount chanCount inBandth outBandth = lift $ serverListen addr conCount chanCount inBandth outBandth
-  clientConnect addr chanCount inBandth outBandth = lift $ clientConnect addr chanCount inBandth outBandth
+instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt, MonadError NetworkError (mt m)) => NetworkMonad t (mt m) where
+  serverListen = lift . serverListen
+  clientConnect = lift . clientConnect
   serverPeer = lift serverPeer
   peerConnected = lift peerConnected
   peerDisconnected = lift peerDisconnected
@@ -205,6 +133,9 @@ instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m
   peerSend e = lift $ peerSend e
   networkChannels = lift networkChannels
   terminateHost = lift terminateHost
+  networkPeers = lift networkPeers
+  connected = lift connected
+  disconnected = lift disconnected
   {-# INLINE serverListen #-}
   {-# INLINE clientConnect #-}
   {-# INLINE serverPeer #-}
@@ -220,26 +151,9 @@ instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m
   {-# INLINE peerSend #-}
   {-# INLINE networkChannels #-}
   {-# INLINE terminateHost #-}
-
--- | Return collection of connected peers
-networkPeers :: NetworkMonad t m => m (Dynamic t (S.Seq Peer))
-networkPeers = do
-  connE <- peerConnected
-  dconnE <- peerDisconnected
-  foldDyn updatePeers mempty $ align connE dconnE
-  where
-  updatePeers a peers = case a of
-    This conPeer  -> peers S.|> conPeer
-    That dconPeer -> S.filter (/= dconPeer) peers
-    These conPeer dconPeer -> S.filter (/= dconPeer) (peers S.|> conPeer)
-
--- | Fires when is connected to remote server
-connected :: NetworkMonad t m => m (Event t Peer)
-connected = undefined
-
--- | Fires when is disconnected from remote server
-disconnected :: NetworkMonad t m => m (Event t ())
-disconnected = undefined
+  {-# INLINE networkPeers #-}
+  {-# INLINE connected #-}
+  {-# INLINE disconnected #-}
 
 -- | Variation of 'peerSend' with static peer
 peerSend' :: (LoggingMonad t m, NetworkMonad t m)
@@ -259,36 +173,3 @@ terminateNetwork e = do
     mapM_ disconnectPeerM =<< sample (current peers)
     disconnectFromServerM
     terminateHost
-
--- | Initialise network system and create host
-networkBind :: (LoggingMonad t m, MonadError NetworkError m)
-  => Maybe SockAddr -- ^ Address to listen, Nothing is client
-  -> Word -- ^ Maximum count of connections
-  -> Word -- ^ Number of channels to open
-  -> Word32 -- ^ Incoming max bandwidth
-  -> Word32 -- ^ Outcoming max bandwidth
-  -> Bool -- ^ Detailed logging
-  -> m Host
-networkBind addr conCount chanCount inBandth outBandth detailed = do
-  phost <- liftIO $ create addr (fromIntegral conCount) (fromIntegral chanCount) inBandth outBandth
-  if phost == nullPtr
-    then throwError NetworkInitFail
-    else do
-      when detailed $ logMsgMLn LogInfo $ case addr of
-        Nothing -> "Network: client network system initalized"
-        Just a -> "Network: binded to " <> showl a
-      return phost
-
--- | Connect to remote server
-networkConnect :: (LoggingMonad t m, MonadError NetworkError m)
-  => Host -- ^ Initialised host (local network system)
-  -> SockAddr -- ^ Address of host
-  -> Word -- ^ Count of channels to open
-  -> Word32 -- ^ Additional data (0 default)
-  -> Bool -- ^ Detailed logging (log debug info)
-  -> m Peer
-networkConnect host addr chanCount datum detailed = do
-  peer <- liftIO $ connect host addr (fromIntegral chanCount) datum
-  unless (peer == nullPtr) $ throwError $ NetworkConnectFail addr
-  when detailed $ logMsgMLn LogInfo $ "Network: connected to " <> showl addr
-  return peer

@@ -14,16 +14,16 @@ module Game.GoreAndAsh.Network.State(
   , Peer
   , MessageEventPayload
   -- * State
-  , NetworkState
-  , networkStateHost
-  , networkStateServer
-  , networkStatePeerConnect
+  , NetworkEnv
+  , networkEnvHost
+  , networkEnvServer
+  , networkEnvPeerConnect
   , newtorkStatePeerDisconnect
-  , networkStatePeerDisconnectFire
-  , networkStateOptions
-  , networkStateMessageEvent
-  , networkStateMaxChannels
-  , newNetworkState
+  , networkEnvPeerDisconnectFire
+  , networkEnvOptions
+  , networkEnvMessageEvent
+  , networkEnvMaxChannels
+  , newNetworkEnv
   ) where
 
 import Control.DeepSeq
@@ -47,59 +47,59 @@ type MessageEventPayload = (Peer, B.ChannelID, BS.ByteString)
 -- | Inner state of network layer
 --
 -- [@t@] - FRP engine, you can safely ignore the parameter.
-data NetworkState t = NetworkState {
+data NetworkEnv t = NetworkEnv {
   -- | There a ENet host object is stored once the local server started to listen
   -- or local client is connected to remote server.
   --
   -- Note that host is create both for clients and servers.
-  networkStateHost :: !(ExternalRef t (Maybe Host))
+  networkEnvHost :: !(ExternalRef t (Maybe Host))
   -- | Stored information about connection to server. Used by client.
-, networkStateServer :: !(ExternalRef t (Maybe Peer))
+, networkEnvServer :: !(ExternalRef t (Maybe Peer))
   -- | Fires when a new peer is connected
-, networkStatePeerConnect :: !(Event t Peer)
+, networkEnvPeerConnect :: !(Event t Peer)
   -- | Fires when a peer is disconnected
 , newtorkStatePeerDisconnect :: !(Event t Peer)
   -- | Action that fires event about peer disconnection
-, networkStatePeerDisconnectFire :: !(Peer -> IO Bool)
+, networkEnvPeerDisconnectFire :: !(Peer -> IO Bool)
   -- | Store connection options that were used to create the state.
-, networkStateOptions :: !(NetworkOptions ())
+, networkEnvOptions :: !(NetworkOptions ())
   -- | Event about incomming network message. Holds peer the message come from,
   -- channel id and payload.
-, networkStateMessageEvent :: !(Event t MessageEventPayload)
+, networkEnvMessageEvent :: !(Event t MessageEventPayload)
   -- | Store current number of channels
-, networkStateMaxChannels :: !(ExternalRef t Word)
+, networkEnvMaxChannels :: !(ExternalRef t Word)
 } deriving (Generic)
 
-instance NFData (NetworkState t) where
-  rnf NetworkState{..} = networkStateHost `seq`
-    networkStatePeerConnect `seq`
+instance NFData (NetworkEnv t) where
+  rnf NetworkEnv{..} = networkEnvHost `seq`
+    networkEnvPeerConnect `seq`
     newtorkStatePeerDisconnect `seq`
-    networkStatePeerDisconnectFire `seq`
-    networkStateServer `seq`
-    networkStateOptions `deepseq`
-    networkStateMessageEvent `seq`
-    networkStateMaxChannels `seq`
+    networkEnvPeerDisconnectFire `seq`
+    networkEnvServer `seq`
+    networkEnvOptions `deepseq`
+    networkEnvMessageEvent `seq`
+    networkEnvMaxChannels `seq`
     ()
 
 -- | Creates initial state
-newNetworkState :: MonadAppHost t m
+newNetworkEnv :: MonadAppHost t m
   => NetworkOptions s -- ^ Initialisation options
   -> Event t MessageEventPayload -- ^ Event that fires when a network message arrives
   -> Event t Peer -- ^ Connection event
   -> Event t Peer -- ^ Disconnection event
   -> (Peer -> IO Bool) -- | Action that fires event about peer disconnection
-  -> m (NetworkState t)
-newNetworkState opts msgE peerConn peerDisconn fireDisconnect = do
+  -> m (NetworkEnv t)
+newNetworkEnv opts msgE peerConn peerDisconn fireDisconnect = do
   host <- newExternalRef Nothing
   serv <- newExternalRef Nothing
   maxchans <- newExternalRef 0
-  return NetworkState {
-      networkStateHost = host
-    , networkStateServer = serv
-    , networkStatePeerConnect = peerConn
+  return NetworkEnv {
+      networkEnvHost = host
+    , networkEnvServer = serv
+    , networkEnvPeerConnect = peerConn
     , newtorkStatePeerDisconnect = peerDisconn
-    , networkStatePeerDisconnectFire = fireDisconnect
-    , networkStateOptions = opts { networkNextOptions = () }
-    , networkStateMessageEvent = msgE
-    , networkStateMaxChannels = maxchans
+    , networkEnvPeerDisconnectFire = fireDisconnect
+    , networkEnvOptions = opts { networkNextOptions = () }
+    , networkEnvMessageEvent = msgE
+    , networkEnvMaxChannels = maxchans
     }
