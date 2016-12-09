@@ -10,6 +10,7 @@ Portability : POSIX
 The module contains monadic and arrow API of network core module.
 -}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecursiveDo #-}
 module Game.GoreAndAsh.Network.API(
   -- * Network API
     NetworkMonad(..)
@@ -18,10 +19,16 @@ module Game.GoreAndAsh.Network.API(
   , peerSend'
   , peerSend''
   , terminateNetwork
+  -- * Collections
+  , processPeers
+  , HasDisconnect(..)
+  , processPeersWithDisconnect
   ) where
 
 import Control.Monad.Catch
 import Control.Monad.Except
+import Data.Map.Strict (Map)
+import Data.Monoid
 import Foreign
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
@@ -33,6 +40,7 @@ import Network.ENet.Bindings (ChannelID)
 import Network.Socket (SockAddr)
 
 import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as M
 import qualified Data.Sequence as S
 
 -- | Parameters for 'serverListen'
@@ -53,7 +61,9 @@ data ClientConnect = ClientConnect {
 } deriving (Generic)
 
 -- | API of the network module
-class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m, MonadError NetworkError m) => NetworkMonad t m | m -> t where
+class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
+     , MonadError NetworkError m, MonadAppHost t m)
+  => NetworkMonad t m | m -> t where
   -- | Start listening for messages, initialise internal host object
   serverListen :: LoggingMonad t m
     => Event t ServerListen -- ^ Input parameters
@@ -83,6 +93,10 @@ class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m, MonadError 
   -- | Disconnect peer (server side).
   -- Returns event that fires when disconnection is complete.
   disconnectPeer :: Event t Peer -> m (Event t ())
+
+  -- | Disconnect many peers (server side).
+  -- Returns event that fires when disconnection is complete.
+  disconnectPeers :: Foldable f => Event t (f Peer) -> m (Event t ())
 
   -- | Disconnect from remote server (client side)
   disconnectFromServerM :: m ()
@@ -117,7 +131,7 @@ class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m, MonadError 
   disconnected :: m (Event t ())
 
 -- | Automatic lifting across monad stack
-instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt, MonadError NetworkError (mt m)) => NetworkMonad t (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt, MonadError NetworkError (mt m)) => NetworkMonad t (mt m) where
   serverListen = lift . serverListen
   clientConnect = lift . clientConnect
   serverPeer = lift serverPeer
@@ -125,6 +139,7 @@ instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m
   peerDisconnected = lift peerDisconnected
   disconnect e = lift $ disconnect e
   disconnectPeer e = lift $ disconnectPeer e
+  disconnectPeers e = lift $ disconnectPeers e
   disconnectPeerM e = lift $ disconnectPeerM e
   disconnectFromServerM = lift $ disconnectFromServerM
   disconnectFromServer e = lift $ disconnectFromServer e
@@ -143,6 +158,7 @@ instance {-# OVERLAPPABLE #-} (MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m
   {-# INLINE peerDisconnected #-}
   {-# INLINE disconnect #-}
   {-# INLINE disconnectPeer #-}
+  {-# INLINE disconnectPeers #-}
   {-# INLINE disconnectPeerM #-}
   {-# INLINE disconnectFromServerM #-}
   {-# INLINE disconnectFromServer #-}
@@ -166,10 +182,45 @@ peerSend'' :: (LoggingMonad t m, NetworkMonad t m)
 peerSend'' peer chan e = peerSend $ fmap (\a -> (peer, chan, a)) e
 
 -- | Terminate all connections and destroy host object
-terminateNetwork :: (MonadAppHost t m, NetworkMonad t m) => Event t () -> m (Event t ())
+terminateNetwork :: NetworkMonad t m => Event t () -> m (Event t ())
 terminateNetwork e = do
   peers <- networkPeers
   performAppHost $ ffor e $ const $ do
     mapM_ disconnectPeerM =<< sample (current peers)
     disconnectFromServerM
     terminateHost
+
+-- | Create component for each connected peer and automatically handle peer
+-- connection and disconnection.
+processPeers :: NetworkMonad t m => (Peer -> m a) -> m (Dynamic t (Map Peer a))
+processPeers handlePeer = do
+  connE <- peerConnected
+  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  discE <- peerDisconnected
+  let delE = ffor discE $ \p -> M.singleton p (Nothing)
+      updE = addE <> delE
+  holdKeyCollection mempty updE (\p _ -> handlePeer p)
+
+-- | Defines that 'a' structure has disconnect event
+class HasDisconnect a where
+  getDisconnect :: a -> Event t ()
+
+-- | Create component for each connected peer and automatically handle peer
+-- connection and disconnection.
+--
+-- In distinct from 'processPeers' the components inside the collection can
+-- disconnect themself.
+processPeersWithDisconnect :: (NetworkMonad t m, HasDisconnect a)
+  => (Peer -> m a) -> m (Dynamic t (Map Peer a))
+processPeersWithDisconnect handlePeer = do
+  connE <- peerConnected
+  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  discE <- peerDisconnected
+  let delE = ffor discE $ \p -> M.singleton p (Nothing)
+  rec
+    outputsDyn <- holdKeyCollection mempty updE (\p _ -> handlePeer p)
+    let selfDelDyn = fmap (fmap (const Nothing) . getDisconnect) <$> outputsDyn
+        selfDelE = switchPromptlyDyn $ mergeMap <$> selfDelDyn
+        updE = addE <> delE <> selfDelE
+  _ <- disconnectPeers $ fmap M.keys selfDelE
+  return outputsDyn

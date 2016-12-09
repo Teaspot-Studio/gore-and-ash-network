@@ -220,6 +220,9 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   disconnectPeer e = performAppHost $ fmap disconnectPeerM e
   {-# INLINE disconnectPeer #-}
 
+  disconnectPeers e = performAppHost $ fmap (mapM_ disconnectPeerM) e
+  {-# INLINE disconnectPeers #-}
+
   disconnectFromServerM = do
     st <- ask
     modifyExternalRefM (networkEnvServer st) $ \case
