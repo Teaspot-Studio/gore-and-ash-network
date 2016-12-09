@@ -172,6 +172,34 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer = do
     detailLog = when (networkDetailedLogging $ networkEnvOptions st) . putStrLn
 
 instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkMonad t (NetworkT t m) where
+  networkMessage = asks networkEnvMessageEvent
+  {-# INLINE networkMessage #-}
+
+  peerSendM peer chan msg = do
+    detailed <- asks (networkDetailedLogging . networkEnvOptions)
+    when detailed $ logMsgLnM LogInfo $ "Network: sending packet via channel "
+       <> showl chan <> ", payload: " <> showl msg
+    let sendAction = liftIO $ P.send peer chan =<< P.poke (messageToPacket msg)
+    catch sendAction $ \(e :: IOException) -> do
+      logMsgLnM LogError $ "Network: failed to send packet '" <> showl e <> "'"
+  {-# INLINE peerSendM #-}
+
+  peerSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> peerSendM peer chan msg
+  {-# INLINE peerSend #-}
+
+  networkChannels = externalRefDynamic =<< asks networkEnvMaxChannels
+  {-# INLINE networkChannels #-}
+
+  terminateHost = do
+    st <- ask
+    modifyExternalRefM (networkEnvHost st) $ \case
+      Nothing -> return (Nothing, ())
+      Just host -> do
+        liftIO $ destroy host
+        return (Nothing, ())
+  {-# INLINE terminateHost #-}
+
+instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkServer t (NetworkT t m) where
   serverListen e = do
     st <- ask
     detailedDyn <- loggingDebugFlag
@@ -180,21 +208,6 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
       host <- networkBind (Just listenAddress) listenMaxConns listenChanns listenIncoming listenOutcoming detailed
       writeExternalRef (networkEnvHost st) (Just host)
   {-# INLINE serverListen #-}
-
-  clientConnect e = do
-    st <- ask
-    detailedDyn <- loggingDebugFlag
-    performAppHostAsync $ ffor e $ \ClientConnect{..} -> wrapError $ do
-      detailed <- sample (current detailedDyn)
-      host <- networkBind Nothing 1 clientChanns clientIncoming clientOutcoming detailed
-      writeExternalRef (networkEnvHost st) (Just host)
-      serv <- networkConnect host clientAddrr clientChanns 0 detailed
-      writeExternalRef (networkEnvServer st) (Just serv)
-
-  {-# INLINE clientConnect #-}
-
-  serverPeer = externalRefDynamic =<< asks networkEnvServer
-  {-# INLINE serverPeer #-}
 
   peerConnected = asks networkEnvPeerConnect
   {-# INLINE peerConnected #-}
@@ -223,6 +236,32 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   disconnectPeers e = performAppHost $ fmap (mapM_ disconnectPeerM) e
   {-# INLINE disconnectPeers #-}
 
+  networkPeers = do
+    connE <- peerConnected
+    dconnE <- peerDisconnected
+    foldDyn updatePeers mempty $ align connE dconnE
+    where
+    updatePeers a peers = case a of
+      This conPeer  -> peers S.|> conPeer
+      That dconPeer -> S.filter (/= dconPeer) peers
+      These conPeer dconPeer -> S.filter (/= dconPeer) (peers S.|> conPeer)
+  {-# INLINE networkPeers #-}
+
+instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkClient t (NetworkT t m) where
+  clientConnect e = do
+    st <- ask
+    detailedDyn <- loggingDebugFlag
+    performAppHostAsync $ ffor e $ \ClientConnect{..} -> wrapError $ do
+      detailed <- sample (current detailedDyn)
+      host <- networkBind Nothing 1 clientChanns clientIncoming clientOutcoming detailed
+      writeExternalRef (networkEnvHost st) (Just host)
+      serv <- networkConnect host clientAddrr clientChanns 0 detailed
+      writeExternalRef (networkEnvServer st) (Just serv)
+  {-# INLINE clientConnect #-}
+
+  serverPeer = externalRefDynamic =<< asks networkEnvServer
+  {-# INLINE serverPeer #-}
+
   disconnectFromServerM = do
     st <- ask
     modifyExternalRefM (networkEnvServer st) $ \case
@@ -234,44 +273,6 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
 
   disconnectFromServer = performAppHost . fmap (const disconnectFromServerM)
   {-# INLINE disconnectFromServer #-}
-
-  networkMessage = asks networkEnvMessageEvent
-  {-# INLINE networkMessage #-}
-
-  peerSendM peer chan msg = do
-    detailed <- asks (networkDetailedLogging . networkEnvOptions)
-    when detailed $ logMsgLnM LogInfo $ "Network: sending packet via channel "
-       <> showl chan <> ", payload: " <> showl msg
-    let sendAction = liftIO $ P.send peer chan =<< P.poke (messageToPacket msg)
-    catch sendAction $ \(e :: IOException) -> do
-      logMsgLnM LogError $ "Network: failed to send packet '" <> showl e <> "'"
-  {-# INLINE peerSendM #-}
-
-  peerSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> peerSendM peer chan msg
-  {-# INLINE peerSend #-}
-
-  networkChannels = externalRefDynamic =<< asks networkEnvMaxChannels
-  {-# INLINE networkChannels #-}
-
-  terminateHost = do
-    st <- ask
-    modifyExternalRefM (networkEnvHost st) $ \case
-      Nothing -> return (Nothing, ())
-      Just host -> do
-        liftIO $ destroy host
-        return (Nothing, ())
-  {-# INLINE terminateHost #-}
-
-  networkPeers = do
-    connE <- peerConnected
-    dconnE <- peerDisconnected
-    foldDyn updatePeers mempty $ align connE dconnE
-    where
-    updatePeers a peers = case a of
-      This conPeer  -> peers S.|> conPeer
-      That dconPeer -> S.filter (/= dconPeer) peers
-      These conPeer dconPeer -> S.filter (/= dconPeer) (peers S.|> conPeer)
-  {-# INLINE networkPeers #-}
 
   connected = asks (fcutMaybe . externalEvent . networkEnvServer)
   {-# INLINE connected #-}
