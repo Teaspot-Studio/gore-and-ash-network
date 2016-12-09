@@ -15,7 +15,7 @@ type AppMonad = TimerT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider
 
 -- Server application.
 -- The application should be generic in the host monad that is used
-appServer :: (LoggingMonad t m, NetworkMonad t m) => PortNumber -> m ()
+appServer :: (LoggingMonad t m, NetworkServer t m) => PortNumber -> m ()
 appServer p = do
   e <- getPostBuild
   loggingSetDebugFlag True
@@ -34,8 +34,14 @@ appServer p = do
   discE <- peerDisconnected
   logInfoE $ ffor discE $ const $ "Peer is disconnected..."
 
-  -- timeE <- tickEvery (realToFrac (10 :: Double))
-  -- logInfoE $ ffor timeE $ const $ "..."
+  _ <- processPeers peerWidget
+  return ()
+  where
+  peerWidget peer = do
+    let chan = mempty
+    msgE <- peerChanMessage peer chan
+    logInfoE $ ffor msgE $ \msg -> "Peer send a message: " <> showl msg
+    peerChanSend peer chan (Message ReliableMessage <$> msgE)
 
 -- | Find server address by host name or IP
 resolveServer :: MonadIO m => HostName -> ServiceName -> m SockAddr
@@ -47,7 +53,7 @@ resolveServer host serv = do
 
 -- Client application.
 -- The application should be generic in the host monad that is used
-appClient :: (LoggingMonad t m, NetworkMonad t m) => HostName -> ServiceName -> m ()
+appClient :: (LoggingMonad t m, TimerMonad t m, NetworkClient t m) => HostName -> ServiceName -> m ()
 appClient host serv = do
   addr <- resolveServer host serv
   e <- getPostBuild
@@ -58,6 +64,14 @@ appClient host serv = do
     , clientOutcoming = 0
     })
   logInfoE $ ffor connectedE $ const "Connected to server!"
+  _ <- whenConnected (pure ()) $ \server -> do
+    buildE <- getPostBuild
+    tickE <- tickEvery (realToFrac (5 :: Double))
+    let sendE = leftmost [tickE, buildE]
+    _ <- peerChanSend server mempty $ ffor sendE $ const $ Message ReliableMessage "Hello, server!"
+    respondE <- peerChanMessage server mempty
+    logInfoE $ ffor respondE $ \msg -> "Server respond: " <> showl msg
+  return ()
 
 data Mode = Client HostName ServiceName | Server PortNumber
 

@@ -4,6 +4,7 @@ module Network.ENet.Bindings where
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
+import Data.Semiring
 
 import Network.Socket(HostAddress)
 
@@ -28,7 +29,7 @@ instance Enum SocketType where
   fromEnum Datagram = 2
   toEnum 1 = Stream
   toEnum 2 = Datagram
-  toEnum _ = Datagram 
+  toEnum _ = Datagram
 
 instance Storable SocketType where
   sizeOf    _ = (#size ENetSocketType)
@@ -105,15 +106,15 @@ data PacketFlag = Reliable
                 deriving (Show, Eq)
 
 -- | Used in creation of flag set
-instance Enum PacketFlag where 
-  fromEnum f = case f of 
+instance Enum PacketFlag where
+  fromEnum f = case f of
     Reliable -> 1
     Unsequenced -> 2
     NoAllocate -> 4
     UnreliableFragment -> 8
     IsSent -> 256
     PacketFlagUnknown -> 0
-  toEnum i = case i of 
+  toEnum i = case i of
     1 -> Reliable
     2 -> Unsequenced
     4 -> NoAllocate
@@ -150,6 +151,29 @@ instance Storable EventType where
 -- | Wrapper for channel index
 newtype ChannelID = ChannelID Word8
                   deriving (Show, Eq, Storable)
+
+-- | Be carefull with '(-)' as it truncates channel ID to zero if result is less
+-- than zero.
+instance Num ChannelID where
+  (ChannelID a) + (ChannelID b) = ChannelID (a + b)
+  (ChannelID a) - (ChannelID b) = ChannelID c'
+    where
+      a' = fromIntegral a :: Int
+      b' = fromIntegral b :: Int
+      c = a' - b'
+      c' = fromIntegral $ if c < 0 then 0 else c
+  (ChannelID a) * (ChannelID b) = ChannelID (a * b)
+  abs = id
+  signum = const $ ChannelID 1
+  fromInteger i = ChannelID (fromInteger i)
+
+instance Monoid ChannelID where
+  mempty = ChannelID 0
+  (ChannelID a) `mappend` (ChannelID b) = ChannelID (a + b)
+
+instance Semiring ChannelID where
+  one = ChannelID 1
+  (ChannelID a) <.> (ChannelID b) = ChannelID (a * b)
 
 data Event = Event
              EventType

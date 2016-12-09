@@ -52,6 +52,7 @@ module Game.GoreAndAsh.Network(
   -- * Types
     Host
   , Peer
+  , ChannelID
   , NetworkT
   -- ** Options
   , NetworkOptions
@@ -70,16 +71,29 @@ module Game.GoreAndAsh.Network(
   , messageToPacket
   -- * Network API
   , NetworkMonad(..)
-  , ServerListen(..)
-  , ClientConnect(..)
-  , peerSend'
-  , peerSend''
+  , peerSend
+  , peerChanSend
   , terminateNetwork
+  , peerMessage
+  , peerChanMessage
+  -- ** Client API
+  , NetworkClient(..)
+  , ClientConnect(..)
+  , whenConnected
+  , whenConnectedWithDisconnect
+  -- ** Server API
+  , NetworkServer(..)
+  , ServerListen(..)
+  -- ** Collections
+  , processPeers
+  , HasDisconnect(..)
+  , processPeersWithDisconnect
   ) where
 
 -- imports for docs
 import Game.GoreAndAsh.Core
 import Game.GoreAndAsh.Logging
+import Network.ENet.Bindings (ChannelID(..))
 
 import Game.GoreAndAsh.Network.API as X
 import Game.GoreAndAsh.Network.Error as X

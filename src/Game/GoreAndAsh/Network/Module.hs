@@ -175,17 +175,17 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   networkMessage = asks networkEnvMessageEvent
   {-# INLINE networkMessage #-}
 
-  peerSendM peer chan msg = do
+  msgSendM peer chan msg = do
     detailed <- asks (networkDetailedLogging . networkEnvOptions)
     when detailed $ logMsgLnM LogInfo $ "Network: sending packet via channel "
        <> showl chan <> ", payload: " <> showl msg
     let sendAction = liftIO $ P.send peer chan =<< P.poke (messageToPacket msg)
     catch sendAction $ \(e :: IOException) -> do
       logMsgLnM LogError $ "Network: failed to send packet '" <> showl e <> "'"
-  {-# INLINE peerSendM #-}
+  {-# INLINE msgSendM #-}
 
-  peerSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> peerSendM peer chan msg
-  {-# INLINE peerSend #-}
+  msgSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> msgSendM peer chan msg
+  {-# INLINE msgSend #-}
 
   networkChannels = externalRefDynamic =<< asks networkEnvMaxChannels
   {-# INLINE networkChannels #-}
