@@ -66,7 +66,7 @@ appClient host serv = do
   logInfoE $ ffor connectedE $ const "Connected to server!"
   _ <- whenConnected (pure ()) $ \server -> do
     buildE <- getPostBuild
-    tickE <- tickEvery (realToFrac (5 :: Double))
+    tickE <- tickEvery (realToFrac (1 :: Double))
     let sendE = leftmost [tickE, buildE]
     _ <- peerChanSend server mempty $ ffor sendE $ const $ Message ReliableMessage "Hello, server!"
     respondE <- peerChanMessage server mempty

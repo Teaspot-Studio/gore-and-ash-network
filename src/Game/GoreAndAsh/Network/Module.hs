@@ -143,10 +143,12 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer = do
   return ()
   where
     noTerminator = return ()
+    -- very important
+    awaitForEvent = networkPollTimeout $ networkEnvOptions st
 
     handleEvents :: Host -> m ThreadId
-    handleEvents host = liftIO . forkIO $ forever $ do
-      me <- service host 0
+    handleEvents host = liftIO . forkOS $ forever $ do
+      me <- service host awaitForEvent
       case me of
         Nothing -> return ()
         Just e -> handleEvent e

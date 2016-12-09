@@ -288,7 +288,8 @@ foreign import ccall unsafe "enet.h enet_host_connect"                   hostCon
   :: Ptr Host -> Ptr Address -> CSize -> Word32 -> IO (Ptr Peer)
 foreign import ccall unsafe "enet.h enet_host_check_events"              hostCheckEvents
   :: Ptr Host -> Ptr Event -> IO CUInt
-foreign import ccall unsafe "enet.h enet_host_service"                   hostService
+-- Here it is marked as safe, as I want use it in blocking mode
+foreign import ccall safe "enet.h enet_host_service"                     hostService
   :: Ptr Host -> Ptr Event -> Word32 -> IO CUInt
 foreign import ccall unsafe "enet.h enet_host_flush"                     hostFlush
   :: Ptr Host -> IO ()

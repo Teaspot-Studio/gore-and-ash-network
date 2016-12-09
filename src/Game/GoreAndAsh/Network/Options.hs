@@ -15,6 +15,7 @@ module Game.GoreAndAsh.Network.Options(
   , networkIncomingBandwidth
   , networkOutcomingBandwidth
   , networkDetailedLogging
+  , networkPollTimeout
   , networkNextOptions
   ) where
 
@@ -28,6 +29,13 @@ data NetworkOptions s = NetworkOptions {
   , networkIncomingBandwidth  :: !Word32 -- ^ Incoming max bandwidth
   , networkOutcomingBandwidth :: !Word32 -- ^ Outcoming max bandwidth
   , networkDetailedLogging    :: !Bool -- ^ Should log everything or not
+  -- | Maximum time that polling can await an message (milliseconds).
+  --
+  -- Note: we use a safe call to get next event from enet library, so
+  -- one call cost around 100ns. Also network packages are sent each call
+  -- to the function, so the parameter should have reasonable small value,
+  -- but not too small or you will get high CPU usage on idle run.
+  , networkPollTimeout        :: !Word32
   , networkNextOptions        :: !s -- ^ Options of underlying module
   }
   deriving (Generic)
@@ -42,6 +50,7 @@ instance NFData s => NFData (NetworkOptions s)
 -- , networkIncomingBandwidth = 0
 -- , networkOutcomingBandwidth = 0
 -- , networkDetailedLogging = False
+-- , networkPollTimeout = 100
 -- , networkNextOptions = s
 -- }
 -- @
@@ -52,5 +61,6 @@ defaultNetworkOptions s = NetworkOptions {
   , networkIncomingBandwidth = 0
   , networkOutcomingBandwidth = 0
   , networkDetailedLogging = False
+  , networkPollTimeout = 100
   , networkNextOptions = s
   }
