@@ -18,6 +18,7 @@ module Game.GoreAndAsh.Network.API(
   , peerChanSend
   , terminateNetwork
   , peerMessage
+  , chanMessage
   , peerChanMessage
   , HasDisconnect(..)
   -- ** Client API
@@ -205,6 +206,14 @@ peerMessage peer = do
   emsg <- networkMessage
   return $ fforMaybe emsg $ \(msgPeer, ch, bs) -> if msgPeer == peer
     then Just (ch, bs)
+    else Nothing
+
+-- | Specialisation of 'networkMessage' event for given cahnnel
+chanMessage :: NetworkMonad t m => ChannelID -> m (Event t (Peer, BS.ByteString))
+chanMessage chan = do
+  emsg <- networkMessage
+  return $ fforMaybe emsg $ \(peer, ch, bs) -> if chan == ch
+    then Just (peer, bs)
     else Nothing
 
 -- | Specialisation of 'networkMessage' event for given peer and channel
