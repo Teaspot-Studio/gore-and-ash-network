@@ -68,10 +68,6 @@ newtype NetworkT t m a = NetworkT { runNetworkT :: ReaderT (NetworkEnv t) m a }
 instance MonadTrans (NetworkT t) where
   lift = NetworkT . lift
 
-instance MonadCatch m => MonadError NetworkError (NetworkT t m) where
-  throwError = throwM
-  catchError = catch
-
 instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (NetworkT t m) where
   newEventWithTrigger = lift . newEventWithTrigger
   newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
@@ -282,8 +278,8 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   disconnected = asks (fkeepNothing . externalEvent . networkEnvServer)
   {-# INLINE disconnected #-}
 
--- | Initialise network system and create host
-networkBind :: (LoggingMonad t m, MonadError NetworkError m)
+-- | Initialise network system and create host, can throw 'NetworkError'
+networkBind :: (LoggingMonad t m, MonadThrow m)
   => Maybe SockAddr -- ^ Address to listen, Nothing is client
   -> Word -- ^ Maximum count of connections
   -> Word -- ^ Number of channels to open
@@ -294,15 +290,15 @@ networkBind :: (LoggingMonad t m, MonadError NetworkError m)
 networkBind addr conCount chanCount inBandth outBandth detailed = do
   phost <- liftIO $ create addr (fromIntegral conCount) (fromIntegral chanCount) inBandth outBandth
   if phost == nullPtr
-    then throwError NetworkInitFail
+    then throwM NetworkInitFail
     else do
       when detailed $ logMsgLnM LogInfo $ case addr of
         Nothing -> "Network: client network system initalized"
         Just a -> "Network: binded to " <> showl a
       return phost
 
--- | Connect to remote server
-networkConnect :: (LoggingMonad t m, MonadError NetworkError m)
+-- | Connect to remote server, can throw 'NetworkError'
+networkConnect :: (LoggingMonad t m, MonadThrow m)
   => Host -- ^ Initialised host (local network system)
   -> SockAddr -- ^ Address of host
   -> Word -- ^ Count of channels to open
@@ -311,6 +307,6 @@ networkConnect :: (LoggingMonad t m, MonadError NetworkError m)
   -> m Peer
 networkConnect host addr chanCount datum detailed = do
   peer <- liftIO $ connect host addr (fromIntegral chanCount) datum
-  when (peer == nullPtr) $ throwError $ NetworkConnectFail addr
+  when (peer == nullPtr) $ throwM $ NetworkConnectFail addr
   when detailed $ logMsgLnM LogInfo $ "Network: connected to " <> showl addr
   return peer

@@ -68,9 +68,11 @@ data ClientConnect = ClientConnect {
 , clientOutcoming :: !Word32 -- ^ Outcoming max bandwidth
 } deriving (Generic)
 
--- | API of the network module, shared operations between client and server
+-- | API of the network module, shared operations between client and server.
+--
+-- Operations can throw 'MonadError' exception.
 class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
-     , MonadError NetworkError m, MonadAppHost t m)
+     , MonadAppHost t m)
   => NetworkMonad t m | m -> t where
   -- | Fires when a network message is received
   networkMessage :: m (Event t (Peer, ChannelID, BS.ByteString))
@@ -143,7 +145,7 @@ class NetworkMonad t m => NetworkServer t m | m -> t where
   networkPeers :: m (Dynamic t (S.Seq Peer))
 
 -- | Automatic lifting across monad stack
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt, MonadError NetworkError (mt m)) => NetworkMonad t (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt) => NetworkMonad t (mt m) where
   networkMessage = lift networkMessage
   msgSendM peer chan msg = lift $ msgSendM peer chan msg
   msgSend e = lift $ msgSend e
@@ -155,7 +157,7 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch
   {-# INLINE networkChannels #-}
   {-# INLINE terminateHost #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkClient t m, MonadCatch (mt m), MonadTrans mt, MonadError NetworkError (mt m)) => NetworkClient t (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkClient t m, MonadCatch (mt m), MonadTrans mt) => NetworkClient t (mt m) where
   clientConnect = lift . clientConnect
   serverPeer = lift serverPeer
   disconnectFromServerM = lift $ disconnectFromServerM
@@ -169,7 +171,7 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkM
   {-# INLINE connected #-}
   {-# INLINE disconnected #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkServer t m, MonadCatch (mt m), MonadTrans mt, MonadError NetworkError (mt m)) => NetworkServer t (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkServer t m, MonadCatch (mt m), MonadTrans mt) => NetworkServer t (mt m) where
   serverListen = lift . serverListen
   peerConnected = lift peerConnected
   peerDisconnected = lift peerDisconnected
