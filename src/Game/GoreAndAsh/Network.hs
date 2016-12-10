@@ -75,6 +75,7 @@ module Game.GoreAndAsh.Network(
   , peerChanSend
   , terminateNetwork
   , peerMessage
+  , chanMessage
   , peerChanMessage
   -- ** Client API
   , NetworkClient(..)
