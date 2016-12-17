@@ -291,6 +291,9 @@ foreign import ccall unsafe "enet.h enet_host_check_events"              hostChe
 -- Here it is marked as safe, as I want use it in blocking mode
 foreign import ccall safe "enet.h enet_host_service"                     hostService
   :: Ptr Host -> Ptr Event -> Word32 -> IO CUInt
+-- And unsafe version for no-timeouts
+foreign import ccall unsafe "enet.h enet_host_service"                   hostServiceUnsafe
+  :: Ptr Host -> Ptr Event -> Word32 -> IO CUInt
 foreign import ccall unsafe "enet.h enet_host_flush"                     hostFlush
   :: Ptr Host -> IO ()
 foreign import ccall unsafe "enet.h enet_host_broadcast"                 hostBroadcast

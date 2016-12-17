@@ -35,6 +35,10 @@ data NetworkOptions s = NetworkOptions {
   -- one call cost around 100ns. Also network packages are sent each call
   -- to the function, so the parameter should have reasonable small value,
   -- but not too small or you will get high CPU usage on idle run.
+  --
+  -- If set to zero, the implementation would use unsafe call to get next
+  -- event from enet library with no timeout. So it is would lead to high
+  -- CPU usage at idle.
   , networkPollTimeout        :: !Word32
   , networkNextOptions        :: !s -- ^ Options of underlying module
   }

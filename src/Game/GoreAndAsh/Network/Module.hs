@@ -115,7 +115,9 @@ instance (MonadIO (HostFrame t), GameModule t m) => GameModule t (NetworkT t m) 
     (disconnPeerE, fireDisconnPeer) <- newExternalEvent
     s <- newNetworkEnv opts messageE connPeerE disconnPeerE fireDisconnPeer
     a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m) s)
-    processNetEvents s messageFire fireConnPeer fireDisconnPeer
+    let pollFunc = if networkPollTimeout (networkEnvOptions s) == 0
+          then serviceUnsafe else service
+    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc
     return a
 
   withModule t _ = withENetDo . withModule t (Proxy :: Proxy m)
@@ -126,8 +128,9 @@ processNetEvents :: forall t m . MonadAppHost t m
   -> MessageEventFire -- ^ Action that fires event about incoming message
   -> ConnectPeerFire  -- ^ Action that fires event about connected peer
   -> DisconnectPeerFire -- ^ Action that fires event about disconnected peer
+  -> ENetServiceFunc -- ^ Service function for ENet
   -> m ()
-processNetEvents st msgFire fireConnPeer fireDisconnPeer = do
+processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
   rec termatorPrevDyn <- holdAppHost (return noTerminator) $
         ffor (externalEvent $ networkEnvHost st) $ \case
           Nothing -> return noTerminator
@@ -144,7 +147,7 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer = do
 
     handleEvents :: Host -> m ThreadId
     handleEvents host = liftIO . forkOS $ forever $ do
-      me <- service host awaitForEvent
+      me <- enetService host awaitForEvent
       case me of
         Nothing -> return ()
         Just e -> handleEvent e

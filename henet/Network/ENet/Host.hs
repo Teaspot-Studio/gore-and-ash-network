@@ -32,9 +32,20 @@ checkEvents host = alloca $ \ptr -> do
     EQ -> return $ Nothing
     LT -> throwErrno "error checking events"
 
-service :: Ptr B.Host -> Word32 -> IO (Maybe B.Event)
+type ENetServiceFunc = Ptr B.Host -> Word32 -> IO (Maybe B.Event)
+
+service :: ENetServiceFunc
 service host timeout = alloca $ \ptr -> do
   status <- B.hostService host ptr timeout
+  case compare status 0 of
+    GT -> fmap Just $ peek ptr
+    EQ -> return $ Nothing
+    LT -> throwErrno "error servicing events"
+
+-- | Same as 'service' but use unsafe FFI call
+serviceUnsafe :: ENetServiceFunc
+serviceUnsafe host timeout = alloca $ \ptr -> do
+  status <- B.hostServiceUnsafe host ptr timeout
   case compare status 0 of
     GT -> fmap Just $ peek ptr
     EQ -> return $ Nothing
