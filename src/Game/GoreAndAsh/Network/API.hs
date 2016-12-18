@@ -30,6 +30,9 @@ module Game.GoreAndAsh.Network.API(
   , NetworkServer(..)
   , ServerListen(..)
   -- ** Collections
+  , PeerAction(..)
+  , peersCollection
+  , peersCollectionWithDisconnect
   , processPeers
   , processPeersWithDisconnect
   ) where
@@ -49,6 +52,7 @@ import Network.ENet.Bindings (ChannelID)
 import Network.Socket (SockAddr)
 
 import qualified Data.ByteString as BS
+import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
 import qualified Data.Sequence as S
 
@@ -232,20 +236,79 @@ terminateNetwork e = do
     mapM_ disconnectPeerM =<< sample (current peers)
     terminateHost
 
+-- | Action with 'Peer' in 'peersCollection'
+data PeerAction = PeerRemove | PeerAdd
+
+-- | Create component for each connected peer and automatically handle peer
+-- connection and disconnection. The function has special input to manually
+-- adding and removing peers from collection.
+peersCollection :: NetworkServer t m
+  => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer -> m a) -- ^ Widget of single peer
+  -> m (Dynamic t (Map Peer a)) -- ^ Collected output of all currently active peers
+peersCollection manualE handlePeer = do
+  -- transform manual actions
+  let manualE' = fmap converAction <$> manualE
+  -- sample current set of peers
+  peersSeq <- sample . current =<< networkPeers
+  let initialPeers = M.fromList $ fmap (, ()) $ F.toList peersSeq
+  -- listen connected peers
+  connE <- peerConnected
+  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  -- listen disconnected peers
+  discE <- peerDisconnected
+  -- Merge all sources of peers into collection
+  let delE = ffor discE $ \p -> M.singleton p (Nothing)
+      updE = addE <> delE <> manualE'
+  holdKeyCollection initialPeers updE (\p _ -> handlePeer p)
+  where
+    converAction action = case action of
+      PeerRemove -> Nothing
+      PeerAdd -> Just ()
+
 -- | Create component for each connected peer and automatically handle peer
 -- connection and disconnection.
 processPeers :: NetworkServer t m => (Peer -> m a) -> m (Dynamic t (Map Peer a))
-processPeers handlePeer = do
-  connE <- peerConnected
-  let addE = ffor connE $ \p -> M.singleton p (Just ())
-  discE <- peerDisconnected
-  let delE = ffor discE $ \p -> M.singleton p (Nothing)
-      updE = addE <> delE
-  holdKeyCollection mempty updE (\p _ -> handlePeer p)
+processPeers = peersCollection never
 
 -- | Defines that 'a' structure has disconnect event
 class HasDisconnect a where
   getDisconnect :: a -> Event t ()
+
+-- | Create component for each connected peer and automatically handle peer
+-- connection and disconnection. The function has special input to manually
+-- adding and removing peers from collection.
+--
+-- In distinct from 'processPeers' the components inside the collection can
+-- disconnect themselves.
+peersCollectionWithDisconnect :: (NetworkServer t m, HasDisconnect a)
+  => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer -> m a) -- ^ Component for each peer
+  -> m (Dynamic t (Map Peer a)) -- ^ Collected output of peers components
+peersCollectionWithDisconnect manualE handlePeer = do
+  -- convert manual events
+  let manualE' = fmap converAction <$> manualE
+  -- sample current set of peers
+  peersSeq <- sample . current =<< networkPeers
+  let initialPeers = M.fromList $ fmap (, ()) $ F.toList peersSeq
+  -- listen connected peers
+  connE <- peerConnected
+  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  -- listen disconnected peers
+  discE <- peerDisconnected
+  let delE = ffor discE $ \p -> M.singleton p (Nothing)
+  -- recursive loop for tracking self disconnection
+  rec
+    outputsDyn <- holdKeyCollection initialPeers updE (\p _ -> handlePeer p)
+    let selfDelDyn = fmap (fmap (const Nothing) . getDisconnect) <$> outputsDyn
+        selfDelE = switchPromptlyDyn $ mergeMap <$> selfDelDyn
+        updE = addE <> delE <> selfDelE <> manualE'
+  _ <- disconnectPeers $ fmap M.keys selfDelE
+  return outputsDyn
+  where
+    converAction action = case action of
+      PeerRemove -> Nothing
+      PeerAdd -> Just ()
 
 -- | Create component for each connected peer and automatically handle peer
 -- connection and disconnection.
@@ -254,18 +317,7 @@ class HasDisconnect a where
 -- disconnect themselves.
 processPeersWithDisconnect :: (NetworkServer t m, HasDisconnect a)
   => (Peer -> m a) -> m (Dynamic t (Map Peer a))
-processPeersWithDisconnect handlePeer = do
-  connE <- peerConnected
-  let addE = ffor connE $ \p -> M.singleton p (Just ())
-  discE <- peerDisconnected
-  let delE = ffor discE $ \p -> M.singleton p (Nothing)
-  rec
-    outputsDyn <- holdKeyCollection mempty updE (\p _ -> handlePeer p)
-    let selfDelDyn = fmap (fmap (const Nothing) . getDisconnect) <$> outputsDyn
-        selfDelE = switchPromptlyDyn $ mergeMap <$> selfDelDyn
-        updE = addE <> delE <> selfDelE
-  _ <- disconnectPeers $ fmap M.keys selfDelE
-  return outputsDyn
+processPeersWithDisconnect = peersCollectionWithDisconnect never
 
 -- | Switch to provided component when client is connected to server.
 whenConnected :: NetworkClient t m

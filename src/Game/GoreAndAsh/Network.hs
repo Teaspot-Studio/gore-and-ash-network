@@ -52,8 +52,10 @@ module Game.GoreAndAsh.Network(
   , NetworkServer(..)
   , ServerListen(..)
   -- ** Collections
+  , PeerAction(..)
+  , peersCollection
+  , peersCollectionWithDisconnect
   , processPeers
-  , HasDisconnect(..)
   , processPeersWithDisconnect
   ) where
 
