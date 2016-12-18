@@ -244,9 +244,10 @@ data PeerAction = PeerRemove | PeerAdd
 -- adding and removing peers from collection.
 peersCollection :: NetworkServer t m
   => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
   -> (Peer -> m a) -- ^ Widget of single peer
   -> m (Dynamic t (Map Peer a)) -- ^ Collected output of all currently active peers
-peersCollection manualE handlePeer = do
+peersCollection manualE peerChecker handlePeer = do
   -- transform manual actions
   let manualE' = fmap converAction <$> manualE
   -- sample current set of peers
@@ -254,7 +255,10 @@ peersCollection manualE handlePeer = do
   let initialPeers = M.fromList $ fmap (, ()) $ F.toList peersSeq
   -- listen connected peers
   connE <- peerConnected
-  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  let connE' = flip push connE $ \p -> do
+        res <- peerChecker p
+        return $ if res then Just p else Nothing
+  let addE = ffor connE' $ \p -> M.singleton p (Just ())
   -- listen disconnected peers
   discE <- peerDisconnected
   -- Merge all sources of peers into collection
@@ -269,7 +273,7 @@ peersCollection manualE handlePeer = do
 -- | Create component for each connected peer and automatically handle peer
 -- connection and disconnection.
 processPeers :: NetworkServer t m => (Peer -> m a) -> m (Dynamic t (Map Peer a))
-processPeers = peersCollection never
+processPeers = peersCollection never (const $ pure True)
 
 -- | Defines that 'a' structure has disconnect event
 class HasDisconnect a where
@@ -283,9 +287,10 @@ class HasDisconnect a where
 -- disconnect themselves.
 peersCollectionWithDisconnect :: (NetworkServer t m, HasDisconnect a)
   => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
   -> (Peer -> m a) -- ^ Component for each peer
   -> m (Dynamic t (Map Peer a)) -- ^ Collected output of peers components
-peersCollectionWithDisconnect manualE handlePeer = do
+peersCollectionWithDisconnect manualE peerChecker handlePeer = do
   -- convert manual events
   let manualE' = fmap converAction <$> manualE
   -- sample current set of peers
@@ -293,7 +298,10 @@ peersCollectionWithDisconnect manualE handlePeer = do
   let initialPeers = M.fromList $ fmap (, ()) $ F.toList peersSeq
   -- listen connected peers
   connE <- peerConnected
-  let addE = ffor connE $ \p -> M.singleton p (Just ())
+  let connE' = flip push connE $ \p -> do
+        res <- peerChecker p
+        return $ if res then Just p else Nothing
+  let addE = ffor connE' $ \p -> M.singleton p (Just ())
   -- listen disconnected peers
   discE <- peerDisconnected
   let delE = ffor discE $ \p -> M.singleton p (Nothing)
@@ -317,7 +325,7 @@ peersCollectionWithDisconnect manualE handlePeer = do
 -- disconnect themselves.
 processPeersWithDisconnect :: (NetworkServer t m, HasDisconnect a)
   => (Peer -> m a) -> m (Dynamic t (Map Peer a))
-processPeersWithDisconnect = peersCollectionWithDisconnect never
+processPeersWithDisconnect = peersCollectionWithDisconnect never (const $ pure True)
 
 -- | Switch to provided component when client is connected to server.
 whenConnected :: NetworkClient t m
