@@ -50,7 +50,7 @@ instance NFData s => NFData (NetworkOptions s)
 --
 -- @
 -- NetworkOptions {
--- , networkChannelsCount = 2
+-- , networkChannelsCount = 3
 -- , networkIncomingBandwidth = 0
 -- , networkOutcomingBandwidth = 0
 -- , networkDetailedLogging = False
@@ -61,7 +61,7 @@ instance NFData s => NFData (NetworkOptions s)
 defaultNetworkOptions :: s -- ^ Options of underlying module
   -> NetworkOptions s
 defaultNetworkOptions s = NetworkOptions {
-    networkChannelsCount = 2
+    networkChannelsCount = 3
   , networkIncomingBandwidth = 0
   , networkOutcomingBandwidth = 0
   , networkDetailedLogging = False
