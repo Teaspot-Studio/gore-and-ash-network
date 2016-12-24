@@ -89,6 +89,10 @@ class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
   -- Returns event that fires when sending is complete.
   msgSend :: LoggingMonad t m => Event t (Peer, ChannelID, Message) -> m (Event t ())
 
+  -- | Sends many packets to given peer on given channel when input event fires
+  -- Returns event that fires when sending is complete.
+  msgSendMany :: (LoggingMonad t m, Foldable f) => Event t (f (Peer, ChannelID, Message)) -> m (Event t ())
+
   -- | Return count of allocated network channels
   networkChannels :: m (Dynamic t Word)
 
@@ -154,11 +158,13 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch
   networkMessage = lift networkMessage
   msgSendM peer chan msg = lift $ msgSendM peer chan msg
   msgSend e = lift $ msgSend e
+  msgSendMany e = lift $ msgSendMany e
   networkChannels = lift networkChannels
   terminateHost = lift terminateHost
   {-# INLINE networkMessage #-}
   {-# INLINE msgSendM #-}
   {-# INLINE msgSend #-}
+  {-# INLINE msgSendMany #-}
   {-# INLINE networkChannels #-}
   {-# INLINE terminateHost #-}
 

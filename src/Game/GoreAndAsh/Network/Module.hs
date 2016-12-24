@@ -188,6 +188,10 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   msgSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> msgSendM peer chan msg
   {-# INLINE msgSend #-}
 
+  msgSendMany e = performAppHost $ ffor e $ \msgs -> forM_ msgs $
+    \(peer, chan, msg) -> msgSendM peer chan msg
+  {-# INLINE msgSendMany #-}
+
   networkChannels = externalRefDynamic =<< asks networkEnvMaxChannels
   {-# INLINE networkChannels #-}
 
