@@ -340,14 +340,17 @@ whenConnected :: NetworkClient t m
   -> m (Dynamic t a) -- ^ Collected result from both stages.
 whenConnected whenDown m = do
   -- Check if the server is already exising at build time
-  curServer <- serverPeer
-  buildE <- getPostBuild
-  let alreadyE = attachPromptlyDynWithMaybe (\mserv _ -> mserv) curServer buildE
-  -- Events when server connected/disconnected in future
-  serverE <- connected
-  disconE <- disconnected
-  let updE = leftmost [fmap m serverE, fmap (const whenDown) disconE, fmap m alreadyE]
-  holdAppHost whenDown updE
+  curServerDyn <- serverPeer
+  curServer <- sample . current $ curServerDyn
+  case curServer of
+    Just server -> do
+      a <- m server
+      return $ pure a
+    Nothing -> do
+      serverE <- connected
+      disconE <- disconnected
+      let updE = leftmost [fmap m serverE, fmap (const whenDown) disconE]
+      holdAppHost whenDown updE
 
 -- | Switch to provided component when client is connected to server.
 --
