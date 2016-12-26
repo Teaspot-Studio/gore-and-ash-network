@@ -42,7 +42,7 @@ import Network.ENet.Host
 import Network.ENet.Packet (peek)
 import Network.Socket (SockAddr)
 
-import qualified Data.Sequence as S
+import qualified Data.Set as S
 import qualified Network.ENet.Bindings as B
 import qualified Network.ENet.Packet as P
 import qualified Network.ENet.Peer as P
@@ -247,9 +247,11 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
     foldDyn updatePeers mempty $ align connE dconnE
     where
     updatePeers a peers = case a of
-      This conPeer  -> peers S.|> conPeer
-      That dconPeer -> S.filter (/= dconPeer) peers
-      These conPeer dconPeer -> S.filter (/= dconPeer) (peers S.|> conPeer)
+      This conPeer  -> S.insert conPeer peers
+      That dconPeer -> S.delete dconPeer peers
+      These conPeer dconPeer -> if conPeer == dconPeer
+        then peers
+        else S.delete dconPeer . S.insert conPeer $ peers
   {-# INLINE networkPeers #-}
 
 instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkClient t (NetworkT t m) where

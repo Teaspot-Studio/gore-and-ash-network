@@ -54,7 +54,7 @@ import Network.Socket (SockAddr)
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
-import qualified Data.Sequence as S
+import qualified Data.Set as S
 
 -- | Parameters for 'serverListen'
 data ServerListen = ServerListen {
@@ -151,7 +151,7 @@ class NetworkMonad t m => NetworkServer t m | m -> t where
   disconnectPeers :: Foldable f => Event t (f Peer) -> m (Event t ())
 
   -- | Return collection of connected peers
-  networkPeers :: m (Dynamic t (S.Seq Peer))
+  networkPeers :: m (Dynamic t (S.Set Peer))
 
 -- | Automatic lifting across monad stack
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt) => NetworkMonad t (mt m) where
