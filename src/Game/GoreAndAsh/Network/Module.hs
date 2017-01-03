@@ -24,10 +24,9 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
-import Data.Align
 import Data.Monoid
 import Data.Proxy
-import Data.These
+import Data.Set (Set)
 import Data.Word
 import Foreign hiding (peek)
 import Game.GoreAndAsh
@@ -106,7 +105,7 @@ type ConnectPeerFire = Peer -> IO Bool
 -- | Action that fires event about peer disconnection
 type DisconnectPeerFire = Peer -> IO Bool
 
-instance (MonadIO (HostFrame t), GameModule t m) => GameModule t (NetworkT t m) where
+instance (MonadIO (HostFrame t), GameModule t m, MonadAppHost t m, MonadCatch m, MonadBaseControl IO m) => GameModule t (NetworkT t m) where
   type ModuleOptions t (NetworkT t m) = NetworkOptions (ModuleOptions t m)
 
   runModule opts m = do
@@ -114,13 +113,29 @@ instance (MonadIO (HostFrame t), GameModule t m) => GameModule t (NetworkT t m) 
     (connPeerE, fireConnPeer) <- newExternalEvent
     (disconnPeerE, fireDisconnPeer) <- newExternalEvent
     s <- newNetworkEnv opts messageE connPeerE disconnPeerE fireDisconnPeer
-    a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m) s)
+    a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m') s)
     let pollFunc = if networkPollTimeout (networkEnvOptions s) == 0
           then serviceUnsafe else service
     processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc
     return a
+    where
+      m' = do
+        handlePeersCollection =<< asks networkEnvPeers
+        m
 
   withModule t _ = withENetDo . withModule t (Proxy :: Proxy m)
+
+-- | Update internal collection of peers
+handlePeersCollection :: (MonadAppHost t m, NetworkServer t m)
+  => ExternalRef t (Set Peer) -- ^ Collection of peers
+  -> m ()
+handlePeersCollection ref = do
+  connE <- peerConnected
+  dconnE <- peerDisconnected
+  performEvent_ $ ffor connE $ \peer ->
+    modifyExternalRef ref $ \ps -> (S.insert peer ps, ())
+  performEvent_ $ ffor dconnE $ \peer ->
+    modifyExternalRef ref $ \ps -> (S.delete peer ps, ())
 
 -- | Poll all events from ENet, does nothing when system doesn't have any initiated host object
 processNetEvents :: forall t m . MonadAppHost t m
@@ -165,15 +180,17 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
         return ()
       B.Receive -> do
         (Packet !fs !bs) <- peek packetPtr
+        let msgt = bitsToMessageType fs
         detailLog $ "Network: Received message at channel " <> show ch <> ": "
-          <> show fs <> ", payload: " <> show bs
-        _ <- msgFire (peer, ch, bs)
+          <> show msgt <> ", payload: " <> show bs
+        res <- msgFire (peer, ch, msgt, bs)
+        unless res $ putStrLn "NO READERS FOR MESSAGE EVENT!"
         return ()
 
     detailLog = when (networkDetailedLogging $ networkEnvOptions st) . putStrLn
 
 instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkMonad t (NetworkT t m) where
-  networkMessage = asks networkEnvMessageEvent
+  networkMessage = fmap (\(peer, ch, _, bs) -> (peer, ch, bs)) <$> asks networkEnvMessageEvent
   {-# INLINE networkMessage #-}
 
   msgSendM peer chan msg = do
@@ -241,17 +258,7 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   disconnectPeers e = performAppHost $ fmap (mapM_ disconnectPeerM) e
   {-# INLINE disconnectPeers #-}
 
-  networkPeers = do
-    connE <- peerConnected
-    dconnE <- peerDisconnected
-    foldDyn updatePeers mempty $ align connE dconnE
-    where
-    updatePeers a peers = case a of
-      This conPeer  -> S.insert conPeer peers
-      That dconPeer -> S.delete dconPeer peers
-      These conPeer dconPeer -> if conPeer == dconPeer
-        then peers
-        else S.delete dconPeer . S.insert conPeer $ peers
+  networkPeers = externalRefDynamic =<< asks networkEnvPeers
   {-# INLINE networkPeers #-}
 
 instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkClient t (NetworkT t m) where
@@ -319,3 +326,4 @@ networkConnect host addr chanCount datum detailed = do
   when (peer == nullPtr) $ throwM $ NetworkConnectFail addr
   when detailed $ logMsgLnM LogInfo $ "Network: connected to " <> showl addr
   return peer
+

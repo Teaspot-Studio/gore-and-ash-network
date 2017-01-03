@@ -41,6 +41,7 @@ import Control.Monad.Catch
 import Control.Monad.Except
 import Data.Map.Strict (Map)
 import Data.Monoid
+import Data.Set (Set)
 import Foreign
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
@@ -54,7 +55,6 @@ import Network.Socket (SockAddr)
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 
 -- | Parameters for 'serverListen'
 data ServerListen = ServerListen {
@@ -151,7 +151,7 @@ class NetworkMonad t m => NetworkServer t m | m -> t where
   disconnectPeers :: Foldable f => Event t (f Peer) -> m (Event t ())
 
   -- | Return collection of connected peers
-  networkPeers :: m (Dynamic t (S.Set Peer))
+  networkPeers :: m (Dynamic t (Set Peer))
 
 -- | Automatic lifting across monad stack
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt) => NetworkMonad t (mt m) where
@@ -342,15 +342,14 @@ whenConnected whenDown m = do
   -- Check if the server is already exising at build time
   curServerDyn <- serverPeer
   curServer <- sample . current $ curServerDyn
-  case curServer of
-    Just server -> do
-      a <- m server
-      return $ pure a
-    Nothing -> do
-      serverE <- connected
-      disconE <- disconnected
-      let updE = leftmost [fmap m serverE, fmap (const whenDown) disconE]
-      holdAppHost whenDown updE
+  initVal <- case curServer of
+    Just server -> m server
+    Nothing -> whenDown
+  -- Dynamic changing of server with rebuilding
+  serverE <- connected
+  disconE <- disconnected
+  let updE = leftmost [fmap m serverE, fmap (const whenDown) disconE]
+  holdAppHost (pure initVal) updE
 
 -- | Switch to provided component when client is connected to server.
 --

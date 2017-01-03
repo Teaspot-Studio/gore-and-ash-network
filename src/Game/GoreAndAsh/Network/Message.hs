@@ -11,16 +11,17 @@ module Game.GoreAndAsh.Network.Message(
     Message(..)
   , MessageType(..)
   , messageToPacket
+  , bitsToMessageType
   ) where
 
 import Control.DeepSeq
 import GHC.Generics
 import Network.ENet
-import qualified Data.ByteString as BS 
+import qualified Data.ByteString as BS
 import qualified Network.ENet.Bindings as B
 
 -- | Strategy how given message is delivered to remote host
-data MessageType = 
+data MessageType =
     ReliableMessage -- ^ TCP like, ordered reliable delivery
   | UnreliableMessage -- ^ Unrelieable, sequenced but fragments are sent with reliability
   | UnsequencedMessage -- ^ Unreliable and unsequenced (not sort while receiving)
@@ -28,25 +29,36 @@ data MessageType =
   | UnsequencedFragmentedMessage -- ^ Unreliable, unsequenced with fragments sent within unreliable method
   deriving (Eq, Ord, Bounded, Enum, Show, Generic)
 
-instance NFData MessageType 
+instance NFData MessageType
 
 -- | Converts high-level message type to bits option for ENet
 messageTypeToBits :: MessageType -> PacketFlagSet
-messageTypeToBits t = case t of 
+messageTypeToBits t = case t of
   ReliableMessage -> makePacketFlagSet [B.Reliable]
   UnsequencedMessage -> makePacketFlagSet [B.Unsequenced]
   UnsequencedFragmentedMessage -> makePacketFlagSet [B.UnreliableFragment, B.Unsequenced]
   UnreliableMessage -> emptyPacketFlagSet
   UnreliableFragmentedMessage -> makePacketFlagSet [B.UnreliableFragment]
 
--- | Message that has individual options about reliability 
+-- | Converts low-level message flags to high-level message type
+bitsToMessageType :: PacketFlagSet -> MessageType
+bitsToMessageType fs' = if B.Reliable `elem` fs then ReliableMessage
+  else if B.UnreliableFragment `elem` fs then
+    if B.Unsequenced `elem` fs then UnsequencedFragmentedMessage
+    else UnreliableFragmentedMessage
+  else if B.Unsequenced `elem` fs then UnsequencedMessage
+    else UnreliableMessage
+  where
+    fs = unpackPacketFlagSet fs'
+
+-- | Message that has individual options about reliability
 data Message = Message {
   messageType :: !MessageType
 , messagePayload :: !BS.ByteString
 } deriving (Show, Generic)
 
-instance NFData Message 
+instance NFData Message
 
 -- | Convert message to internal ENet packet
-messageToPacket :: Message -> Packet 
+messageToPacket :: Message -> Packet
 messageToPacket (Message mt p) = Packet (messageTypeToBits mt) p

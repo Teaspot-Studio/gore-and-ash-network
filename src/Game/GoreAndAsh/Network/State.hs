@@ -17,6 +17,7 @@ module Game.GoreAndAsh.Network.State(
   , NetworkEnv
   , networkEnvHost
   , networkEnvServer
+  , networkEnvPeers
   , networkEnvPeerConnect
   , newtorkStatePeerDisconnect
   , networkEnvPeerDisconnectFire
@@ -27,10 +28,12 @@ module Game.GoreAndAsh.Network.State(
   ) where
 
 import Control.DeepSeq
+import Data.Set (Set)
 import Foreign
 import GHC.Generics (Generic)
 
 import Game.GoreAndAsh
+import Game.GoreAndAsh.Network.Message
 import Game.GoreAndAsh.Network.Options
 
 import qualified Data.ByteString as BS
@@ -42,7 +45,7 @@ type Host = Ptr B.Host
 type Peer = Ptr B.Peer
 
 -- | Holds peer the message come from, channel id and payload.
-type MessageEventPayload = (Peer, B.ChannelID, BS.ByteString)
+type MessageEventPayload = (Peer, B.ChannelID, MessageType, BS.ByteString)
 
 -- | Inner state of network layer
 --
@@ -52,22 +55,24 @@ data NetworkEnv t = NetworkEnv {
   -- or local client is connected to remote server.
   --
   -- Note that host is create both for clients and servers.
-  networkEnvHost :: !(ExternalRef t (Maybe Host))
+  networkEnvHost               :: !(ExternalRef t (Maybe Host))
   -- | Stored information about connection to server. Used by client.
-, networkEnvServer :: !(ExternalRef t (Maybe Peer))
+, networkEnvServer             :: !(ExternalRef t (Maybe Peer))
+  -- | Stored collection of connected peers.
+, networkEnvPeers              :: !(ExternalRef t (Set Peer))
   -- | Fires when a new peer is connected
-, networkEnvPeerConnect :: !(Event t Peer)
+, networkEnvPeerConnect        :: !(Event t Peer)
   -- | Fires when a peer is disconnected
-, newtorkStatePeerDisconnect :: !(Event t Peer)
+, newtorkStatePeerDisconnect   :: !(Event t Peer)
   -- | Action that fires event about peer disconnection
 , networkEnvPeerDisconnectFire :: !(Peer -> IO Bool)
   -- | Store connection options that were used to create the state.
-, networkEnvOptions :: !(NetworkOptions ())
+, networkEnvOptions            :: !(NetworkOptions ())
   -- | Event about incomming network message. Holds peer the message come from,
   -- channel id and payload.
-, networkEnvMessageEvent :: !(Event t MessageEventPayload)
+, networkEnvMessageEvent       :: !(Event t MessageEventPayload)
   -- | Store current number of channels
-, networkEnvMaxChannels :: !(ExternalRef t Word)
+, networkEnvMaxChannels        :: !(ExternalRef t Word)
 } deriving (Generic)
 
 instance NFData (NetworkEnv t) where
@@ -76,6 +81,7 @@ instance NFData (NetworkEnv t) where
     newtorkStatePeerDisconnect `seq`
     networkEnvPeerDisconnectFire `seq`
     networkEnvServer `seq`
+    networkEnvPeers `seq`
     networkEnvOptions `deepseq`
     networkEnvMessageEvent `seq`
     networkEnvMaxChannels `seq`
@@ -92,10 +98,12 @@ newNetworkEnv :: MonadAppHost t m
 newNetworkEnv opts msgE peerConn peerDisconn fireDisconnect = do
   host <- newExternalRef Nothing
   serv <- newExternalRef Nothing
+  peers <- newExternalRef mempty
   maxchans <- newExternalRef 0
   return NetworkEnv {
       networkEnvHost = host
     , networkEnvServer = serv
+    , networkEnvPeers = peers
     , networkEnvPeerConnect = peerConn
     , newtorkStatePeerDisconnect = peerDisconn
     , networkEnvPeerDisconnectFire = fireDisconnect
