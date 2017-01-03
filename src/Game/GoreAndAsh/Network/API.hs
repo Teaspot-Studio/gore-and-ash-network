@@ -16,6 +16,8 @@ module Game.GoreAndAsh.Network.API(
     NetworkMonad(..)
   , peerSend
   , peerChanSend
+  , peerSendMany
+  , peerChanSendMany
   , terminateNetwork
   , peerMessage
   , chanMessage
@@ -209,6 +211,16 @@ peerSend peer e = msgSend $ fmap (\(a, b) -> (peer, a, b)) e
 peerChanSend :: (LoggingMonad t m, NetworkMonad t m)
   => Peer -> ChannelID -> Event t Message -> m (Event t ())
 peerChanSend peer chan e = msgSend $ fmap (\a -> (peer, chan, a)) e
+
+-- | Variation of 'msgSendMany' with static peer
+peerSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
+  => Peer -> Event t (f (ChannelID, Message)) -> m (Event t ())
+peerSendMany peer e = msgSendMany $ fmap (\(a, b) -> (peer, a, b)) <$> e
+
+-- | Variation of 'msgSendMany' with static peer and channel
+peerChanSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
+  => Peer -> ChannelID -> Event t (f Message) -> m (Event t ())
+peerChanSendMany peer chan e = msgSendMany $ fmap (\a -> (peer, chan, a)) <$> e
 
 -- | Specialisation of 'networkMessage' event for given peer
 peerMessage :: NetworkMonad t m => Peer -> m (Event t (ChannelID, BS.ByteString))

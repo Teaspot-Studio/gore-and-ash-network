@@ -39,6 +39,8 @@ module Game.GoreAndAsh.Network(
   , NetworkMonad(..)
   , peerSend
   , peerChanSend
+  , peerSendMany
+  , peerChanSendMany
   , terminateNetwork
   , peerMessage
   , chanMessage
