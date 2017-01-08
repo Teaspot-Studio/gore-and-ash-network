@@ -61,6 +61,8 @@ module Game.GoreAndAsh.Network(
   , peersCollectionWithDisconnect
   , processPeers
   , processPeersWithDisconnect
+  -- ** Generic helpers
+  , guardNotNull
   ) where
 
 -- imports for docs

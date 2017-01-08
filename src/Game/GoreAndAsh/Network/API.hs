@@ -37,6 +37,8 @@ module Game.GoreAndAsh.Network.API(
   , peersCollectionWithDisconnect
   , processPeers
   , processPeersWithDisconnect
+  -- ** Generic helpers
+  , guardNotNull
   ) where
 
 import Control.Monad.Catch
