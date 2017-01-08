@@ -1,20 +1,25 @@
 # For more information, see: https://github.com/commercialhaskell/stack/blob/release/doc/yaml_configuration.md
 
 # Specifies the GHC version and set of packages available (e.g., lts-3.5, nightly-2015-09-21, ghc-7.10.2)
-resolver: lts-7.9
+resolver: lts-7.14
 
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
-#- location:
-#    git: https://github.com/Teaspot-Studio/gore-and-ash-logging
-#    commit: d535d99c83c2c8999afe6aadc015a572ebb023db
+- location:
+    git: git@github.com:reflex-frp/reflex.git
+    commit: 91299fce0bb2caddfba35af6608df57dd31e3690
+- location:
+    git: git@github.com:bennofs/reflex-host.git
+    commit: ef269102ef5c61f15072ed79370e791820e25d8d
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
-- typesafe-endian-0.1.0.1
-- gore-and-ash-logging-3.0.0.0
 - gore-and-ash-2.0.0.0
+- gore-and-ash-logging-3.0.0.0
+- prim-uniq-0.1.0.1
+- ref-tf-0.4.0.1
+- typesafe-endian-0.1.0.1
 
 # Override default flag values for local packages and extra-deps
 flags: {}
