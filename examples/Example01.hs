@@ -39,9 +39,9 @@ appServer p = do
   where
   peerWidget peer = do
     let chan = mempty
-    msgE <- peerChanMessage peer chan
-    logInfoE $ ffor msgE $ \msg -> "Peer send a message: " <> showl msg
-    peerChanSend peer chan (Message ReliableMessage <$> msgE)
+    msgsE <- peerChanMessages peer chan
+    logInfoE $ ffor msgsE $ \msgs -> "Peer send messages: " <> showl (fmap networkMsgPayload msgs)
+    peerChanSendMany peer chan (fmap (Message ReliableMessage . networkMsgPayload) <$> msgsE)
 
 -- | Find server address by host name or IP
 resolveServer :: MonadIO m => HostName -> ServiceName -> m SockAddr
@@ -69,8 +69,8 @@ appClient host serv = do
     tickE <- tickEvery (realToFrac (1 :: Double))
     let sendE = leftmost [tickE, buildE]
     _ <- peerChanSend server mempty $ ffor sendE $ const $ Message ReliableMessage "Hello, server!"
-    respondE <- peerChanMessage server mempty
-    logInfoE $ ffor respondE $ \msg -> "Server respond: " <> showl msg
+    respondsE <- peerChanMessages server mempty
+    logInfoE $ ffor respondsE $ \msgs -> "Server responds: " <> showl (fmap networkMsgPayload msgs)
   return ()
 
 data Mode = Client HostName ServiceName | Server PortNumber

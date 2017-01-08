@@ -18,17 +18,19 @@ module Game.GoreAndAsh.Network.Module(
 
 import Control.Concurrent
 import Control.Exception.Base (IOException)
+import Control.Monad (void)
 import Control.Monad.Base
 import Control.Monad.Catch
 import Control.Monad.Except
-import Control.Monad.Reader
+import Control.Monad.Reader hiding (void)
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
+import Data.IORef
 import Data.Monoid
 import Data.Proxy
 import Data.Set (Set)
 import Data.Word
-import Foreign hiding (peek)
+import Foreign hiding (peek, void)
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network.API
@@ -36,11 +38,13 @@ import Game.GoreAndAsh.Network.Error
 import Game.GoreAndAsh.Network.Message
 import Game.GoreAndAsh.Network.Options
 import Game.GoreAndAsh.Network.State
+import GHC.Event hiding (Event)
 import Network.ENet
 import Network.ENet.Host
 import Network.ENet.Packet (peek)
 import Network.Socket (SockAddr)
 
+import qualified Data.Sequence as Seq
 import qualified Data.Set as S
 import qualified Network.ENet.Bindings as B
 import qualified Network.ENet.Packet as P
@@ -114,9 +118,9 @@ instance (MonadIO (HostFrame t), GameModule t m, MonadAppHost t m, MonadCatch m,
     (disconnPeerE, fireDisconnPeer) <- newExternalEvent
     s <- newNetworkEnv opts messageE connPeerE disconnPeerE fireDisconnPeer
     a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m') s)
-    let pollFunc = if networkPollTimeout (networkEnvOptions s) == 0
+    let pollFunc = if networkPollTimeout opts == 0
           then serviceUnsafe else service
-    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc
+    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc (networkBatchPeriod opts)
     return a
     where
       m' = do
@@ -137,6 +141,42 @@ handlePeersCollection ref = do
   performEvent_ $ ffor dconnE $ \peer ->
     modifyExternalRef ref $ \ps -> (S.delete peer ps, ())
 
+-- | Buffer is sequence of messages. The buffer collects messages from ENet and
+-- fires it to FRP network within configured period of time to reduce amount
+-- of singe messages for a network message (like batching).
+data MessageBuffer = MessageBuffer {
+  bufferTrigger :: !MessageEventFire -- ^ Action that injects pack of messages to FRP network
+, bufferThread  :: !(IORef Bool) -- ^ Concurrent flag to stop timeout callbacks for the buffer
+, bufferMsgs    :: !(IORef MessageEventPayload) -- ^ Storage of packs of messages
+}
+
+-- | Create new message buffer
+newMessageBuffer :: MessageEventFire -- ^ Action that fires event about incoming messages
+  -> Int -- ^ Fire period (milliseconds) of accumulated messages
+  -> IO MessageBuffer
+newMessageBuffer trigger dt = do
+  ref <- newIORef Seq.empty
+  stopRef <- newIORef False
+  mt <- getSystemTimerManager
+  -- chain of callbacks for periodical fire of buffer
+  let go = do
+        s <- atomicModifyIORef' ref $ \s -> (Seq.empty, s)
+        _ <- trigger s
+        stop <- readIORef stopRef
+        unless stop $ void $ registerTimeout mt dt go
+  _ <- registerTimeout mt dt go
+  return $ MessageBuffer trigger stopRef ref
+
+-- | Destruction of internal resources of message buffer
+destroyMessageBuffer :: MessageBuffer -> IO ()
+destroyMessageBuffer MessageBuffer{..} = atomicWriteIORef bufferThread True
+
+-- | Add a new message to internal storage of messages
+putBufferMessage :: MessageBuffer -> NetworkMessage -> IO ()
+{-# INLINE putBufferMessage #-}
+putBufferMessage MessageBuffer{..} msg =
+  atomicModifyIORef' bufferMsgs $ \s -> (s Seq.|> msg, ())
+
 -- | Poll all events from ENet, does nothing when system doesn't have any initiated host object
 processNetEvents :: forall t m . MonadAppHost t m
   => NetworkEnv t -- ^ Context that holds reference with host
@@ -144,31 +184,43 @@ processNetEvents :: forall t m . MonadAppHost t m
   -> ConnectPeerFire  -- ^ Action that fires event about connected peer
   -> DisconnectPeerFire -- ^ Action that fires event about disconnected peer
   -> ENetServiceFunc -- ^ Service function for ENet
+  -> Int -- ^ Period of firing messages to FRP network (millisconds)
   -> m ()
-processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
+processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService dt = do
   rec termatorPrevDyn <- holdAppHost (return noTerminator) $
         ffor (externalEvent $ networkEnvHost st) $ \case
           Nothing -> return noTerminator
           Just host -> do
             terminatorPref <- sample (current termatorPrevDyn)
             liftIO terminatorPref
-            tid <- handleEvents host
-            return $ killThread tid
+            (tid, buff) <- handleEvents host
+            return $ do
+              killThread tid
+              destroyMessageBuffer buff
   return ()
   where
     noTerminator = return ()
     -- very important
     awaitForEvent = networkPollTimeout $ networkEnvOptions st
 
-    handleEvents :: Host -> m ThreadId
-    handleEvents host = liftIO . forkOS $ forever $ do
+    -- Create message buffer, start event listener
+    handleEvents :: Host -> m (ThreadId, MessageBuffer)
+    handleEvents host = liftIO $ do
+      buff <- newMessageBuffer msgFire dt
+      tid <- eventListener buff host
+      return (tid, buff)
+
+    -- Listen ENet events and fill buffer with them
+    eventListener :: MessageBuffer -> Host -> IO ThreadId
+    eventListener buff host = forkOS $ forever $ do
       me <- enetService host awaitForEvent
       case me of
         Nothing -> return ()
-        Just e -> handleEvent e
+        Just e -> handleEvent buff e
 
-    handleEvent :: B.Event -> IO ()
-    handleEvent (B.Event et peer ch edata packetPtr) = case et of
+    -- Process a ENet event, fill message buffer
+    handleEvent :: MessageBuffer -> B.Event -> IO ()
+    handleEvent buff (B.Event et peer ch edata packetPtr) = case et of
       B.None -> detailLog "Network: Event none"
       B.Connect -> do
         detailLog "Network: Peer connected"
@@ -183,15 +235,13 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
         let msgt = bitsToMessageType fs
         detailLog $ "Network: Received message at channel " <> show ch <> ": "
           <> show msgt <> ", payload: " <> show bs
-        res <- msgFire (peer, ch, msgt, bs)
-        unless res $ putStrLn "NO READERS FOR MESSAGE EVENT!"
-        return ()
+        putBufferMessage buff $ NetworkMessage peer ch msgt bs
 
     detailLog = when (networkDetailedLogging $ networkEnvOptions st) . putStrLn
 
 instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkMonad t (NetworkT t m) where
-  networkMessage = fmap (\(peer, ch, _, bs) -> (peer, ch, bs)) <$> asks networkEnvMessageEvent
-  {-# INLINE networkMessage #-}
+  networkMessages = asks networkEnvMessageEvent
+  {-# INLINE networkMessages #-}
 
   msgSendM peer chan msg = do
     detailed <- asks (networkDetailedLogging . networkEnvOptions)

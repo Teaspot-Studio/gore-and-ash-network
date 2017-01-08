@@ -16,6 +16,7 @@ module Game.GoreAndAsh.Network.Options(
   , networkOutcomingBandwidth
   , networkDetailedLogging
   , networkPollTimeout
+  , networkBatchPeriod
   , networkNextOptions
   ) where
 
@@ -40,6 +41,10 @@ data NetworkOptions s = NetworkOptions {
   -- event from enet library with no timeout. So it is would lead to high
   -- CPU usage at idle.
   , networkPollTimeout        :: !Word32
+  -- | At the end of each given period of time the library grubs messages
+  -- from ENet and fires them into FRP network. So this is network pulse
+  -- ticker. Set in millisconds.
+  , networkBatchPeriod        :: !Int
   , networkNextOptions        :: !s -- ^ Options of underlying module
   }
   deriving (Generic)
@@ -55,6 +60,7 @@ instance NFData s => NFData (NetworkOptions s)
 -- , networkOutcomingBandwidth = 0
 -- , networkDetailedLogging = False
 -- , networkPollTimeout = 100
+-- , networkBatchPeriod = 15
 -- , networkNextOptions = s
 -- }
 -- @
@@ -66,5 +72,6 @@ defaultNetworkOptions s = NetworkOptions {
   , networkOutcomingBandwidth = 0
   , networkDetailedLogging = False
   , networkPollTimeout = 100
+  , networkBatchPeriod = 15 -- 60 FPS
   , networkNextOptions = s
   }

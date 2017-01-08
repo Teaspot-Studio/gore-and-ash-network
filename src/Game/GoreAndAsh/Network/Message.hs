@@ -8,15 +8,19 @@ Stability   : experimental
 Portability : POSIX
 -}
 module Game.GoreAndAsh.Network.Message(
-    Message(..)
+    Peer
+  , Message(..)
   , MessageType(..)
+  , NetworkMessage(..)
   , messageToPacket
   , bitsToMessageType
   ) where
 
 import Control.DeepSeq
+import Foreign
 import GHC.Generics
 import Network.ENet
+
 import qualified Data.ByteString as BS
 import qualified Network.ENet.Bindings as B
 
@@ -30,6 +34,18 @@ data MessageType =
   deriving (Eq, Ord, Bounded, Enum, Show, Generic)
 
 instance NFData MessageType
+
+-- | Remote endpoint
+type Peer = Ptr B.Peer
+
+-- | High-level contents of network message
+data NetworkMessage = NetworkMessage {
+  networkMsgPeer    :: !Peer -- ^ Peer the source of the message
+, networkMsgChan    :: !B.ChannelID -- ^ Channel the message came from
+, networkMsgType    :: !MessageType -- ^ Reliability of message
+, networkMsgPayload :: !BS.ByteString -- ^ Payload of message
+} deriving (Generic, Show)
+
 
 -- | Converts high-level message type to bits option for ENet
 messageTypeToBits :: MessageType -> PacketFlagSet

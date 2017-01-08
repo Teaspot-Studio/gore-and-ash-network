@@ -28,6 +28,7 @@ module Game.GoreAndAsh.Network.State(
   ) where
 
 import Control.DeepSeq
+import Data.Sequence (Seq)
 import Data.Set (Set)
 import Foreign
 import GHC.Generics (Generic)
@@ -36,16 +37,13 @@ import Game.GoreAndAsh
 import Game.GoreAndAsh.Network.Message
 import Game.GoreAndAsh.Network.Options
 
-import qualified Data.ByteString as BS
 import qualified Network.ENet.Bindings as B
 
 -- | Local endpoint
 type Host = Ptr B.Host
--- | Remote endpoint
-type Peer = Ptr B.Peer
 
 -- | Holds peer the message come from, channel id and payload.
-type MessageEventPayload = (Peer, B.ChannelID, MessageType, BS.ByteString)
+type MessageEventPayload = Seq NetworkMessage
 
 -- | Inner state of network layer
 --

@@ -27,6 +27,7 @@ module Game.GoreAndAsh.Network(
   , networkOutcomingBandwidth
   , networkDetailedLogging
   , networkPollTimeout
+  , networkBatchPeriod
   , networkNextOptions
   -- ** Errors
   , NetworkError(..)
@@ -37,14 +38,15 @@ module Game.GoreAndAsh.Network(
   , messageToPacket
   -- * Network API
   , NetworkMonad(..)
+  , NetworkMessage(..)
   , peerSend
   , peerChanSend
   , peerSendMany
   , peerChanSendMany
   , terminateNetwork
-  , peerMessage
-  , chanMessage
-  , peerChanMessage
+  , peerMessages
+  , chanMessages
+  , peerChanMessages
   -- ** Client API
   , NetworkClient(..)
   , ClientConnect(..)

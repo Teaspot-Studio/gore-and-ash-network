@@ -19,9 +19,9 @@ module Game.GoreAndAsh.Network.API(
   , peerSendMany
   , peerChanSendMany
   , terminateNetwork
-  , peerMessage
-  , chanMessage
-  , peerChanMessage
+  , peerMessages
+  , chanMessages
+  , peerChanMessages
   , HasDisconnect(..)
   -- ** Client API
   , NetworkClient(..)
@@ -43,20 +43,20 @@ import Control.Monad.Catch
 import Control.Monad.Except
 import Data.Map.Strict (Map)
 import Data.Monoid
+import Data.Sequence (Seq)
 import Data.Set (Set)
 import Foreign
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network.Error
 import Game.GoreAndAsh.Network.Message
-import Game.GoreAndAsh.Network.State
 import GHC.Generics
 import Network.ENet.Bindings (ChannelID)
 import Network.Socket (SockAddr)
 
-import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
+import qualified Data.Sequence as S
 
 -- | Parameters for 'serverListen'
 data ServerListen = ServerListen {
@@ -81,8 +81,8 @@ data ClientConnect = ClientConnect {
 class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
      , MonadAppHost t m)
   => NetworkMonad t m | m -> t where
-  -- | Fires when a network message is received
-  networkMessage :: m (Event t (Peer, ChannelID, BS.ByteString))
+  -- | Fires when a batch of network message is received from underlying ENet library
+  networkMessages :: m (Event t (Seq NetworkMessage))
 
   -- | Sends a packet to given peer on given channel. Constuct time version
   msgSendM :: LoggingMonad t m => Peer -> ChannelID -> Message -> m ()
@@ -157,13 +157,13 @@ class NetworkMonad t m => NetworkServer t m | m -> t where
 
 -- | Automatic lifting across monad stack
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt) => NetworkMonad t (mt m) where
-  networkMessage = lift networkMessage
+  networkMessages = lift networkMessages
   msgSendM peer chan msg = lift $ msgSendM peer chan msg
   msgSend e = lift $ msgSend e
   msgSendMany e = lift $ msgSendMany e
   networkChannels = lift networkChannels
   terminateHost = lift terminateHost
-  {-# INLINE networkMessage #-}
+  {-# INLINE networkMessages #-}
   {-# INLINE msgSendM #-}
   {-# INLINE msgSend #-}
   {-# INLINE msgSendMany #-}
@@ -222,29 +222,32 @@ peerChanSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
   => Peer -> ChannelID -> Event t (f Message) -> m (Event t ())
 peerChanSendMany peer chan e = msgSendMany $ fmap (\a -> (peer, chan, a)) <$> e
 
--- | Specialisation of 'networkMessage' event for given peer
-peerMessage :: NetworkMonad t m => Peer -> m (Event t (ChannelID, BS.ByteString))
-peerMessage peer = do
-  emsg <- networkMessage
-  return $ fforMaybe emsg $ \(msgPeer, ch, bs) -> if msgPeer == peer
-    then Just (ch, bs)
-    else Nothing
+-- | Pass events that contains only not null sets of messages
+guardNotNull :: Reflex t => Event t (Seq a) -> Event t (Seq a)
+guardNotNull = fmapMaybe $ \s -> if S.null s then Nothing else Just s
+{-# INLINE guardNotNull #-}
 
--- | Specialisation of 'networkMessage' event for given cahnnel
-chanMessage :: NetworkMonad t m => ChannelID -> m (Event t (Peer, BS.ByteString))
-chanMessage chan = do
-  emsg <- networkMessage
-  return $ fforMaybe emsg $ \(peer, ch, bs) -> if chan == ch
-    then Just (peer, bs)
-    else Nothing
+-- | Specialisation of 'networkMessages' event for given peer
+peerMessages :: NetworkMonad t m => Peer -> m (Event t (Seq NetworkMessage))
+peerMessages peer = do
+  emsg <- networkMessages
+  return $ guardNotNull . ffor emsg $ \msgs -> S.filter ((== peer) . networkMsgPeer) msgs
+{-# INLINE peerMessages #-}
 
--- | Specialisation of 'networkMessage' event for given peer and channel
-peerChanMessage :: NetworkMonad t m => Peer -> ChannelID -> m (Event t BS.ByteString)
-peerChanMessage peer chan = do
-  emsg <- networkMessage
-  return $ fforMaybe emsg $ \(msgPeer, ch, bs) -> if msgPeer == peer && ch == chan
-    then Just bs
-    else Nothing
+-- | Specialisation of 'networkMessages' event for given cahnnel
+chanMessages :: NetworkMonad t m => ChannelID -> m (Event t (Seq NetworkMessage))
+chanMessages chan = do
+  emsg <- networkMessages
+  return $ guardNotNull . ffor emsg $ \msgs -> S.filter ((== chan) . networkMsgChan) msgs
+{-# INLINE chanMessages #-}
+
+-- | Specialisation of 'networkMessages' event for given peer and channel
+peerChanMessages :: NetworkMonad t m => Peer -> ChannelID -> m (Event t (Seq NetworkMessage))
+peerChanMessages peer chan = do
+  emsg <- networkMessages
+  let test msg = networkMsgChan msg == chan && networkMsgPeer msg == peer
+  return $ guardNotNull . ffor emsg $ \msgs -> S.filter test msgs
+{-# INLINE peerChanMessages #-}
 
 -- | Terminate all connections and destroy host object
 terminateNetwork :: NetworkServer t m => Event t () -> m (Event t ())
