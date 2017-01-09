@@ -37,13 +37,22 @@ module Game.GoreAndAsh.Network.API(
   , peersCollectionWithDisconnect
   , processPeers
   , processPeersWithDisconnect
-  -- ** Generic helpers
-  , guardNotNull
+  -- ** Helpers to process sequences of messages
+  , seqGuardNotNull
+  , splitSeqEither
+  , fforSeqMaybe
+  , pushSeq
+  , pushSeqAlways
+  , seqUnzipEither
+  , seqCutMaybes
+  , seqLeftMay
+  , seqRightMay
   ) where
 
 import Control.Monad.Catch
 import Control.Monad.Except
 import Data.Map.Strict (Map)
+import Data.Maybe
 import Data.Monoid
 import Data.Sequence (Seq)
 import Data.Set (Set)
@@ -225,22 +234,78 @@ peerChanSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
 peerChanSendMany peer chan e = msgSendMany $ fmap (\a -> (peer, chan, a)) <$> e
 
 -- | Pass events that contains only not null sets of messages
-guardNotNull :: Reflex t => Event t (Seq a) -> Event t (Seq a)
-guardNotNull = fmapMaybe $ \s -> if S.null s then Nothing else Just s
-{-# INLINE guardNotNull #-}
+seqGuardNotNull :: Reflex t => Event t (Seq a) -> Event t (Seq a)
+seqGuardNotNull = fmapMaybe $ \s -> if S.null s then Nothing else Just s
+{-# INLINE seqGuardNotNull #-}
+
+-- | Combination of 'splitE' and 'seqUnzipEither' and 'seqGuardNotNull'
+splitSeqEither :: Reflex t => Event t (Seq (Either a b)) -> (Event t (Seq a), Event t (Seq b))
+splitSeqEither ees = (seqGuardNotNull aes, seqGuardNotNull bes)
+  where
+    (aes, bes) = splitE . fmap seqUnzipEither $ ees
+{-# INLINE splitSeqEither #-}
+
+-- | Same as 'fforMaybe', but iterates over sequence of values. Resulting event
+-- doesn't fire when the output sequence is empty.
+fforSeqMaybe :: Reflex t => Event t (Seq a) -> (a -> Maybe b) -> Event t (Seq b)
+fforSeqMaybe e f = seqGuardNotNull $ ffor e $ \as -> seqCutMaybes $ fmap f as
+{-# INLINE fforSeqMaybe #-}
+
+-- | Same as 'push', but iterates over sequence of values. Resulting event
+-- doesn't fire when the output sequence is empty.
+pushSeq :: Reflex t => Event t (Seq a) -> (a -> PushM t (Maybe b)) -> Event t (Seq b)
+pushSeq e f = seqGuardNotNull $ flip pushAlways e $ \as -> fmap seqCutMaybes $ traverse f as
+{-# INLINE pushSeq #-}
+
+-- | Same as 'pushAlways', but iterates over sequence of values.
+pushSeqAlways :: Reflex t => Event t (Seq a) -> (a -> PushM t b) -> Event t (Seq b)
+pushSeqAlways e f = flip pushAlways e $ \as -> traverse f as
+{-# INLINE pushSeqAlways #-}
+
+-- | Unzip sequence of messages of summ type into two separate sequences
+seqUnzipEither :: Seq (Either a b) -> (Seq a, Seq b)
+seqUnzipEither = F.foldl' go (S.empty, S.empty)
+  where
+    go (as, bs) eab = case eab of
+      Left a -> let
+        as' = as S.|> a
+        in as' `seq` (as', bs)
+      Right b -> let
+        bs' = bs S.|> b
+        in bs' `seq` (as, bs')
+{-# INLINE seqUnzipEither #-}
+
+-- | Remove 'Nothing' constructors from sequence
+seqCutMaybes :: Seq (Maybe a) -> Seq a
+seqCutMaybes = fmap fromJust . S.filter isJust
+{-# INLINE seqCutMaybes #-}
+
+-- | Return left head of sequence
+seqLeftMay :: Seq a -> Maybe a
+seqLeftMay s = case S.viewl s of
+  S.EmptyL -> Nothing
+  a S.:< _ -> Just a
+{-# INLINE seqLeftMay #-}
+
+-- | Return right head of sequence
+seqRightMay :: Seq a -> Maybe a
+seqRightMay s = case S.viewr s of
+  S.EmptyR -> Nothing
+  _ S.:> a -> Just a
+{-# INLINE seqRightMay #-}
 
 -- | Specialisation of 'networkMessages' event for given peer
 peerMessages :: NetworkMonad t m => Peer -> m (Event t (Seq NetworkMessage))
 peerMessages peer = do
   emsg <- networkMessages
-  return $ guardNotNull . ffor emsg $ \msgs -> S.filter ((== peer) . networkMsgPeer) msgs
+  return $ seqGuardNotNull . ffor emsg $ \msgs -> S.filter ((== peer) . networkMsgPeer) msgs
 {-# INLINE peerMessages #-}
 
 -- | Specialisation of 'networkMessages' event for given cahnnel
 chanMessages :: NetworkMonad t m => ChannelID -> m (Event t (Seq NetworkMessage))
 chanMessages chan = do
   emsg <- networkMessages
-  return $ guardNotNull . ffor emsg $ \msgs -> S.filter ((== chan) . networkMsgChan) msgs
+  return $ seqGuardNotNull . ffor emsg $ \msgs -> S.filter ((== chan) . networkMsgChan) msgs
 {-# INLINE chanMessages #-}
 
 -- | Specialisation of 'networkMessages' event for given peer and channel
@@ -248,7 +313,7 @@ peerChanMessages :: NetworkMonad t m => Peer -> ChannelID -> m (Event t (Seq Net
 peerChanMessages peer chan = do
   emsg <- networkMessages
   let test msg = networkMsgChan msg == chan && networkMsgPeer msg == peer
-  return $ guardNotNull . ffor emsg $ \msgs -> S.filter test msgs
+  return $ seqGuardNotNull . ffor emsg $ \msgs -> S.filter test msgs
 {-# INLINE peerChanMessages #-}
 
 -- | Terminate all connections and destroy host object

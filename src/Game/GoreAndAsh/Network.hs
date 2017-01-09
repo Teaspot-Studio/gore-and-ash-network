@@ -61,8 +61,16 @@ module Game.GoreAndAsh.Network(
   , peersCollectionWithDisconnect
   , processPeers
   , processPeersWithDisconnect
-  -- ** Generic helpers
-  , guardNotNull
+  -- ** Helpers to process sequences of messages
+  , seqGuardNotNull
+  , fforSeqMaybe
+  , splitSeqEither
+  , pushSeq
+  , pushSeqAlways
+  , seqUnzipEither
+  , seqCutMaybes
+  , seqLeftMay
+  , seqRightMay
   ) where
 
 -- imports for docs
