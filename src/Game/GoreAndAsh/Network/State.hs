@@ -13,21 +13,16 @@ module Game.GoreAndAsh.Network.State(
     Host
   , Peer
   , MessageEventPayload
+  , SendChannel
+  , SendPayload(..)
   -- * State
-  , NetworkEnv
-  , networkEnvHost
-  , networkEnvServer
-  , networkEnvPeers
-  , networkEnvPeerConnect
-  , newtorkStatePeerDisconnect
-  , networkEnvPeerDisconnectFire
-  , networkEnvOptions
-  , networkEnvMessageEvent
-  , networkEnvMaxChannels
+  , NetworkEnv(..)
   , newNetworkEnv
   ) where
 
+import Control.Concurrent.STM.TChan
 import Control.DeepSeq
+import Control.Monad.IO.Class
 import Data.Set (Set)
 import Foreign
 import GHC.Generics (Generic)
@@ -46,6 +41,14 @@ type Peer = Ptr B.Peer
 
 -- | Holds peer the message come from, channel id and payload.
 type MessageEventPayload = (Peer, B.ChannelID, MessageType, BS.ByteString)
+
+-- | Strict tuple for 'SendChannel' content
+data SendPayload = SendPayload !Peer !B.ChannelID !Message
+
+-- | Temporary storage for messages that should be sent. As the ENet library
+-- doesn't like concurrent sending of messages, we use channel with binded
+-- thread to send all outcoming messages.
+type SendChannel = TChan SendPayload
 
 -- | Inner state of network layer
 --
@@ -73,6 +76,8 @@ data NetworkEnv t = NetworkEnv {
 , networkEnvMessageEvent       :: !(Event t MessageEventPayload)
   -- | Store current number of channels
 , networkEnvMaxChannels        :: !(ExternalRef t Word)
+  -- | Channel that stores messages to be sent to remote peers
+, networkSendChannel           :: !SendChannel
 } deriving (Generic)
 
 instance NFData (NetworkEnv t) where
@@ -100,6 +105,7 @@ newNetworkEnv opts msgE peerConn peerDisconn fireDisconnect = do
   serv <- newExternalRef Nothing
   peers <- newExternalRef mempty
   maxchans <- newExternalRef 0
+  chan <- liftIO newTChanIO
   return NetworkEnv {
       networkEnvHost = host
     , networkEnvServer = serv
@@ -110,4 +116,5 @@ newNetworkEnv opts msgE peerConn peerDisconn fireDisconnect = do
     , networkEnvOptions = opts { networkNextOptions = () }
     , networkEnvMessageEvent = msgE
     , networkEnvMaxChannels = maxchans
+    , networkSendChannel = chan
     }

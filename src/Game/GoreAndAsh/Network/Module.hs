@@ -17,11 +17,13 @@ module Game.GoreAndAsh.Network.Module(
   ) where
 
 import Control.Concurrent
+import Control.Concurrent.STM.TChan
 import Control.Exception.Base (IOException)
 import Control.Monad.Base
 import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.Reader
+import Control.Monad.STM
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
 import Data.Monoid
@@ -116,7 +118,7 @@ instance (MonadIO (HostFrame t), GameModule t m, MonadAppHost t m, MonadCatch m,
     a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m') s)
     let pollFunc = if networkPollTimeout (networkEnvOptions s) == 0
           then serviceUnsafe else service
-    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc
+    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc (networkSendChannel s)
     return a
     where
       m' = do
@@ -139,13 +141,14 @@ handlePeersCollection ref = do
 
 -- | Poll all events from ENet, does nothing when system doesn't have any initiated host object
 processNetEvents :: forall t m . MonadAppHost t m
-  => NetworkEnv t -- ^ Context that holds reference with host
-  -> MessageEventFire -- ^ Action that fires event about incoming message
-  -> ConnectPeerFire  -- ^ Action that fires event about connected peer
+  => NetworkEnv t       -- ^ Context that holds reference with host
+  -> MessageEventFire   -- ^ Action that fires event about incoming message
+  -> ConnectPeerFire    -- ^ Action that fires event about connected peer
   -> DisconnectPeerFire -- ^ Action that fires event about disconnected peer
-  -> ENetServiceFunc -- ^ Service function for ENet
+  -> ENetServiceFunc    -- ^ Service function for ENet
+  -> SendChannel        -- ^ Channel with message the function should send
   -> m ()
-processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
+processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService msgChan = do
   rec termatorPrevDyn <- holdAppHost (return noTerminator) $
         ffor (externalEvent $ networkEnvHost st) $ \case
           Nothing -> return noTerminator
@@ -157,15 +160,26 @@ processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService = do
   return ()
   where
     noTerminator = return ()
-    -- very important
     awaitForEvent = networkPollTimeout $ networkEnvOptions st
 
     handleEvents :: Host -> m ThreadId
     handleEvents host = liftIO . forkOS $ forever $ do
       me <- enetService host awaitForEvent
+      sendAllMsgs
       case me of
         Nothing -> return ()
         Just e -> handleEvent e
+
+    sendAllMsgs :: IO ()
+    sendAllMsgs = do
+      mmsg <- atomically $ tryReadTChan msgChan
+      case mmsg of
+        Nothing -> return ()
+        Just (SendPayload peer chan msg) -> do
+          let sendAction = P.send peer chan =<< P.poke (messageToPacket msg)
+          catch sendAction $ \(e :: IOException) ->
+            putStrLn $ "Network: failed to send packet '" <> show e <> "'"
+          sendAllMsgs
 
     handleEvent :: B.Event -> IO ()
     handleEvent (B.Event et peer ch edata packetPtr) = case et of
@@ -194,12 +208,12 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   {-# INLINE networkMessage #-}
 
   msgSendM peer chan msg = do
-    detailed <- asks (networkDetailedLogging . networkEnvOptions)
+    NetworkEnv{..} <- ask
+    let detailed = networkDetailedLogging networkEnvOptions
     when detailed $ logMsgLnM LogInfo $ "Network: sending packet via channel "
        <> showl chan <> ", payload: " <> showl msg
-    let sendAction = liftIO $ P.send peer chan =<< P.poke (messageToPacket msg)
-    catch sendAction $ \(e :: IOException) -> do
-      logMsgLnM LogError $ "Network: failed to send packet '" <> showl e <> "'"
+    liftIO . atomically . writeTChan networkSendChannel $ SendPayload peer chan msg
+
   {-# INLINE msgSendM #-}
 
   msgSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> msgSendM peer chan msg
