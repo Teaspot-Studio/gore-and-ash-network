@@ -25,8 +25,3 @@ And derive `NetworkMonad` for your resulting `AppMonad`:
 newtype AppMonad a = AppMonad (AppStack a)
   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, MonadThrow, MonadCatch LoggingMonad, NetworkMonad)
 ```
-
-С dependencies
-==============
-
-- `lksctp-tools-devel` - SCTP driver for linux (for Windows look for [SctpDrv](http://www.bluestop.org/SctpDrv/))
