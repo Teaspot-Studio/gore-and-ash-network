@@ -12,7 +12,7 @@ Add following to your `stack.yml` to `packages` section:
 ```yaml
 - location:
     git: https://github.com/Teaspot-Studio/gore-and-ash-network.git
-    commit: <PLACE HERE FULL HASH OF LAST COMMIT> 
+    commit: <PLACE HERE FULL HASH OF LAST COMMIT>
 ```
 
 When defining you application stack, add `NetworkT`:
@@ -25,3 +25,8 @@ And derive `NetworkMonad` for your resulting `AppMonad`:
 newtype AppMonad a = AppMonad (AppStack a)
   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, MonadThrow, MonadCatch LoggingMonad, NetworkMonad)
 ```
+
+С dependencies
+==============
+
+- `lksctp-tools-devel` - SCTP driver for linux (for Windows look for [SctpDrv](http://www.bluestop.org/SctpDrv/))
