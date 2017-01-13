@@ -15,26 +15,21 @@ connection handling and basic message handling (bytestring sending and receiving
 -}
 module Game.GoreAndAsh.Network(
   -- * Types
-    Host
-  , Peer
-  , ChannelID
+    ChannelId(..)
+  , RemoteAddress
+  , MessageType(..)
+  , HasNetworkBackend(..)
+  , SendError(..)
   , NetworkT
   -- ** Options
   , NetworkOptions
   , defaultNetworkOptions
-  , networkChannelsCount
-  , networkIncomingBandwidth
-  , networkOutcomingBandwidth
-  , networkDetailedLogging
-  , networkPollTimeout
-  , networkNextOptions
+  , networkOptsDetailedLogging
+  , networkOptsBackendOptions
+  , networkOptsNextOptions
   -- ** Errors
   , NetworkError(..)
   , renderNetworkError
-  -- ** Messages
-  , Message(..)
-  , MessageType(..)
-  , messageToPacket
   -- * Network API
   , NetworkMonad(..)
   , peerSend
@@ -47,12 +42,10 @@ module Game.GoreAndAsh.Network(
   , peerChanMessage
   -- ** Client API
   , NetworkClient(..)
-  , ClientConnect(..)
   , whenConnected
   , whenConnectedWithDisconnect
   -- ** Server API
   , NetworkServer(..)
-  , ServerListen(..)
   -- ** Collections
   , PeerAction(..)
   , peersCollection
@@ -61,14 +54,9 @@ module Game.GoreAndAsh.Network(
   , processPeersWithDisconnect
   ) where
 
--- imports for docs
-import Game.GoreAndAsh.Core
-import Game.GoreAndAsh.Logging
-import Network.ENet.Bindings (ChannelID(..))
-
 import Game.GoreAndAsh.Network.API as X
+import Game.GoreAndAsh.Network.Backend as X
 import Game.GoreAndAsh.Network.Error as X
-import Game.GoreAndAsh.Network.Message as X
 import Game.GoreAndAsh.Network.Module as X
 import Game.GoreAndAsh.Network.Options as X
 import Game.GoreAndAsh.Network.State as X

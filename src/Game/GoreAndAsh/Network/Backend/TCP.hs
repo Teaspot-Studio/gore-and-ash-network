@@ -1,3 +1,12 @@
+{-|
+Module      : Game.GoreAndAsh.Network
+Description : Network backend for TCP transport.
+Copyright   : (c) Anton Gushcha, 2015-2017
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Network.Backend.TCP(
     TCPBackend
   , TCPPeer
@@ -17,17 +26,21 @@ module Game.GoreAndAsh.Network.Backend.TCP(
   , SendErrorCode(..)
   -- * Utils
   , decodeEndPointAddress
+  , encodeEndPointAddress
+  , EndPointAddress(..)
   ) where
 
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
+import Control.Monad.Extra (whenJust)
 import Control.Monad.IO.Class
 import Data.ByteString (ByteString)
 import Data.IORef
 import Data.Map.Strict (Map)
 import Data.Maybe
+import Data.Monoid
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Game.GoreAndAsh.Network.Backend
@@ -73,11 +86,32 @@ data TCPPeer =
     }
   deriving (Generic)
 
+instance Eq TCPPeer where
+  a == b = case a of
+    TCPPeerIncoming{} -> case b of
+      TCPPeerIncoming{} -> peerId a == peerId b
+      _ -> False
+    TCPPeerOutcoming{}   -> case b of
+      TCPPeerOutcoming{} -> peerAddr a == peerAddr b
+      _ -> False
+
+instance Ord TCPPeer where
+  compare a b = case a of
+    TCPPeerIncoming{} -> case b of
+      TCPPeerIncoming{}  -> compare (peerId a) (peerId b)
+      TCPPeerOutcoming{} -> compare (peerAddr a) (peerAddr b)
+    TCPPeerOutcoming{}   -> compare (peerAddr a) (peerAddr b)
+
+instance Show TCPPeer where
+  show TCPPeerIncoming{..}  = "Incoming connection from " <> show peerAddr
+  show TCPPeerOutcoming{..} = "Outcoming connection to " <> show peerAddr
+
 data TCPBackendSomeError =
   -- | Error while decoding channel and message length
     TCPChannelFormatError !TCPPeer !Text !ByteString
   -- | Error that came from transport layer
   | TCPEventError (TransportError EventErrorCode)
+  deriving (Generic, Show)
 
 instance HasNetworkBackend TCPBackend where
   type Peer TCPBackend = TCPPeer
@@ -166,9 +200,24 @@ registerResolving BackendRegistry{..} addr mvar peer =
   atomicModifyIORef' serverResolvings $ \m -> (M.insert addr (mvar, peer) m, ())
 
 -- | Forget about given connection id
-removeConnection :: BackendRegistry -> ConnectionId -> IO ()
-removeConnection BackendRegistry{..} cid =
-  atomicModifyIORef' serverPeers $ \m -> (M.delete cid m, ())
+removeConnection :: BackendRegistry -> ConnectionId -> IO (Maybe TCPPeer)
+removeConnection BackendRegistry{..} cid = do
+  m <- atomicModifyIORef' serverPeers $ \m -> (M.delete cid m, m)
+  return $ M.lookup cid m
+
+-- | Remove partial connections for given server address
+removeResolving :: BackendRegistry -> EndPointAddress -> IO ()
+removeResolving BackendRegistry{..} addr =
+  atomicModifyIORef' serverResolvings $ \m -> (M.delete addr m, ())
+
+-- | Find connections by connection address
+findPeersByAddr :: BackendRegistry -> EndPointAddress -> IO [TCPPeer]
+findPeersByAddr BackendRegistry{..} addr = do
+  mpeers <- readIORef serverPeers
+  let peers = filter ((addr ==) . peerAddr) . M.elems $ mpeers
+  resolves <- readIORef serverResolvings
+  let rpeers = maybe [] (pure . snd) $ M.lookup addr resolves
+  return $ rpeers ++ peers
 
 -- | Create TCP backend from given transport and enpoint (and triggers set)
 makeTCPBackend :: NetworkBackendContext TCPBackend
@@ -195,7 +244,9 @@ makeTCPBackend NetworkBackendContext{..} transport endpoint = do
             Left er -> networkTriggerSomeError $ TCPChannelFormatError peer er fullBs
             Right (msgs, _) -> forM_ msgs $ \(chan, msg) ->
               networkTriggerIncomingMessage peer chan ReliableMessage msg
-      ConnectionClosed cid -> void $ forkIO $ removeConnection registry cid
+      ConnectionClosed cid -> void $ forkIO $ do
+        mpeer <- removeConnection registry cid
+        whenJust mpeer networkTriggerRemoteDisonnected
       ConnectionOpened cid _ addr -> void $ forkIO $ do
         isOucoming <- checkOutcomingResolve registry cid addr
         if isOucoming then return ()
@@ -215,7 +266,21 @@ makeTCPBackend NetworkBackendContext{..} transport endpoint = do
                 networkTriggerRemoteConnected peer
       ReceivedMulticast _ _ -> return () -- TODO: support this
       EndPointClosed -> Immortal.stop immortal
-      ErrorEvent er -> networkTriggerSomeError $ TCPEventError er
+      ErrorEvent er -> do
+        void $ forkIO $ case er of
+          TransportError (EventConnectionLost addr) _ -> do
+            peers <- findPeersByAddr registry addr
+            forM_ peers $ \peer -> case peer of
+              TCPPeerIncoming{} -> do
+                mpeer <- removeConnection registry $ peerId peer
+                whenJust mpeer networkTriggerRemoteDisonnected
+              TCPPeerOutcoming{} -> do
+                removeResolving registry addr
+                let er' = TransportError ConnectFailed "Lost connection"
+                    EndPointAddress addr' = addr
+                networkTriggerConnectionError (er', addr')
+          _ -> return ()
+        networkTriggerSomeError $ TCPEventError er
 
   -- Define backend operations
   let
@@ -257,7 +322,13 @@ decodeChannelMsgs bs
       mmsg <- msgDecoder
       case mmsg of
         Nothing -> return msgs
-        Just msg -> msgsDecoder (msgs S.|> msg)
+        Just msg -> do
+          let msgs' = msgs S.|> msg
+          n <- B.bytesRead
+          if fromIntegral n + 8 > BS.length bs
+            then return msgs'
+            else msgsDecoder msgs'
+
     msgDecoder = B.lookAheadM $ do
       l <- B.getWord32be
       ch <- B.getWord32be

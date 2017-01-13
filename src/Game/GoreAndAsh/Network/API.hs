@@ -25,12 +25,10 @@ module Game.GoreAndAsh.Network.API(
   , HasDisconnect(..)
   -- ** Client API
   , NetworkClient(..)
-  , ClientConnect(..)
   , whenConnected
   , whenConnectedWithDisconnect
   -- ** Server API
   , NetworkServer(..)
-  , ServerListen(..)
   -- ** Collections
   , PeerAction(..)
   , peersCollection
@@ -41,75 +39,55 @@ module Game.GoreAndAsh.Network.API(
 
 import Control.Monad.Catch
 import Control.Monad.Except
+import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
 import Data.Monoid
 import Data.Set (Set)
-import Foreign
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
-import Game.GoreAndAsh.Network.Error
-import Game.GoreAndAsh.Network.Message
-import Game.GoreAndAsh.Network.State
-import GHC.Generics
-import Network.ENet.Bindings (ChannelID)
-import Network.Socket (SockAddr)
+import Game.GoreAndAsh.Network.Backend
 
-import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
 
--- | Parameters for 'serverListen'
-data ServerListen = ServerListen {
-  listenAddress   :: !SockAddr -- ^ Address to listen, can be '0.0.0.0'
-, listenMaxConns  :: !Word -- ^ Maximum count of connections
-, listenChanns    :: !Word -- ^ Number of channels to open
-, listenIncoming  :: !Word32 -- ^ Incoming max bandwidth
-, listenOutcoming :: !Word32 -- ^ Outcoming max bandwidth
-} deriving (Generic)
-
--- | Parameters for 'clientConnect'
-data ClientConnect = ClientConnect {
-  clientAddrr     :: !SockAddr -- ^ Address of host
-, clientChanns    :: !Word -- ^ Count of channels to open
-, clientIncoming  :: !Word32 -- ^ Incoming max bandwidth
-, clientOutcoming :: !Word32 -- ^ Outcoming max bandwidth
-} deriving (Generic)
-
 -- | API of the network module, shared operations between client and server.
---
--- Operations can throw 'MonadError' exception.
 class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
-     , MonadAppHost t m)
-  => NetworkMonad t m | m -> t where
+     , MonadAppHost t m, LoggingMonad t m, HasNetworkBackend a)
+  => NetworkMonad t a m | m -> t, m -> a where
   -- | Fires when a network message is received
-  networkMessage :: m (Event t (Peer, ChannelID, BS.ByteString))
+  networkMessage :: m (Event t (Peer a, ChannelId, ByteString))
 
   -- | Sends a packet to given peer on given channel. Constuct time version
-  msgSendM :: LoggingMonad t m => Peer -> ChannelID -> Message -> m ()
+  msgSendM :: Peer a -> ChannelId -> MessageType -> ByteString -> m ()
 
   -- | Sends a packet to given peer on given channel when input event fires
   -- Returns event that fires when sending is complete.
-  msgSend :: LoggingMonad t m => Event t (Peer, ChannelID, Message) -> m (Event t ())
+  msgSend :: Event t (Peer a, ChannelId, MessageType, ByteString) -> m (Event t ())
 
   -- | Sends many packets to given peer on given channel when input event fires
   -- Returns event that fires when sending is complete.
-  msgSendMany :: (LoggingMonad t m, Foldable f) => Event t (f (Peer, ChannelID, Message)) -> m (Event t ())
-
-  -- | Return count of allocated network channels
-  networkChannels :: m (Dynamic t Word)
+  msgSendMany :: Foldable f => Event t (f (Peer a, ChannelId, MessageType, ByteString)) -> m (Event t ())
 
   -- | Terminate local host object, terminates network module
-  terminateHost :: m ()
+  terminateBackend :: m ()
+
+  -- | Fires when a async error is occured in backend
+  networkSomeError :: m (Event t (BackendEventError a))
+
+  -- | Fires when a message sending failed
+  networkSendError :: m (Event t (SendError a))
+
+  -- | Fires when a connection error occured (incoming or outcoming connection)
+  networkConnectionError :: m (Event t (BackendConnectError a, RemoteAddress))
 
 -- | API of the network module, client side operations
-class NetworkMonad t m => NetworkClient t m | m -> t where
+class NetworkMonad t a m => NetworkClient t a m | m -> t, m -> a where
   -- | Initiate connection to the remote host
-  clientConnect :: LoggingMonad t m
-    => Event t ClientConnect -- ^ Input parameters
-    -> m (Event t (Either NetworkError ()))
+  clientConnect :: Event t (RemoteAddress, ConnectOptions a)
+    -> m (Event t (Peer a))
 
   -- | Connection to remote server (client side). Server side value is always 'Nothing'
-  serverPeer :: m (Dynamic t (Maybe Peer))
+  serverPeer :: m (Dynamic t (Maybe (Peer a)))
 
   -- | Disconnect from remote server (client side)
   disconnectFromServerM :: m ()
@@ -119,111 +97,107 @@ class NetworkMonad t m => NetworkClient t m | m -> t where
   disconnectFromServer :: Event t () -> m (Event t ())
 
   -- | Fires when is connected to remote server
-  connected :: m (Event t Peer)
+  connected :: m (Event t (Peer a))
 
   -- | Fires when is disconnected from remote server
   disconnected :: m (Event t ())
 
 -- | API of the network module, server side operations
-class NetworkMonad t m => NetworkServer t m | m -> t where
-  -- | Start listening for messages, initialise internal host object
-  serverListen :: LoggingMonad t m
-    => Event t ServerListen -- ^ Input parameters
-    -> m (Event t (Either NetworkError ()))
-
+class NetworkMonad t a m => NetworkServer t a m | m -> t, m -> a where
   -- | Event that fires when a client is connected to server
-  peerConnected :: m (Event t Peer)
+  peerConnected :: m (Event t (Peer a))
 
   -- | Event that fires when a client is disconnected from server
-  peerDisconnected :: m (Event t Peer)
-
-  -- | Disconnects all users for server side.
-  -- Returns event that fires when disconnection is complete.
-  disconnect :: Event t a -> m (Event t ())
+  peerDisconnected :: m (Event t (Peer a))
 
   -- | Disconnect connected peer (server side)
-  disconnectPeerM :: Peer -> m ()
+  disconnectPeerM :: Peer a -> m ()
 
   -- | Disconnect peer (server side).
   -- Returns event that fires when disconnection is complete.
-  disconnectPeer :: Event t Peer -> m (Event t ())
+  disconnectPeer :: Event t (Peer a) -> m (Event t ())
 
   -- | Disconnect many peers (server side).
   -- Returns event that fires when disconnection is complete.
-  disconnectPeers :: Foldable f => Event t (f Peer) -> m (Event t ())
+  disconnectPeers :: Foldable f => Event t (f (Peer a)) -> m (Event t ())
 
   -- | Return collection of connected peers
-  networkPeers :: m (Dynamic t (Set Peer))
+  networkPeers :: m (Dynamic t (Set (Peer a)))
 
 -- | Automatic lifting across monad stack
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t m, MonadTrans mt) => NetworkMonad t (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t a m, MonadTrans mt, HasNetworkBackend a) => NetworkMonad t a (mt m) where
   networkMessage = lift networkMessage
-  msgSendM peer chan msg = lift $ msgSendM peer chan msg
-  msgSend e = lift $ msgSend e
-  msgSendMany e = lift $ msgSendMany e
-  networkChannels = lift networkChannels
-  terminateHost = lift terminateHost
   {-# INLINE networkMessage #-}
+  msgSendM peer chan mt msg = lift $ msgSendM peer chan mt msg
   {-# INLINE msgSendM #-}
+  msgSend e = lift $ msgSend e
   {-# INLINE msgSend #-}
+  msgSendMany e = lift $ msgSendMany e
   {-# INLINE msgSendMany #-}
-  {-# INLINE networkChannels #-}
-  {-# INLINE terminateHost #-}
+  terminateBackend = lift terminateBackend
+  {-# INLINE terminateBackend #-}
+  networkSomeError = lift networkSomeError
+  {-# INLINE networkSomeError #-}
+  networkSendError = lift networkSendError
+  {-# INLINE networkSendError #-}
+  networkConnectionError = lift networkConnectionError
+  {-# INLINE networkConnectionError #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkClient t m, MonadCatch (mt m), MonadTrans mt) => NetworkClient t (mt m) where
-  clientConnect = lift . clientConnect
-  serverPeer = lift serverPeer
-  disconnectFromServerM = lift $ disconnectFromServerM
-  disconnectFromServer e = lift $ disconnectFromServer e
-  connected = lift connected
-  disconnected = lift disconnected
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkClient t a m, MonadCatch (mt m), MonadTrans mt, HasNetworkBackend a) => NetworkClient t a (mt m) where
+  clientConnect e = lift $ clientConnect e
   {-# INLINE clientConnect #-}
+  serverPeer = lift serverPeer
   {-# INLINE serverPeer #-}
+  disconnectFromServerM = lift $ disconnectFromServerM
   {-# INLINE disconnectFromServerM #-}
+  disconnectFromServer e = lift $ disconnectFromServer e
   {-# INLINE disconnectFromServer #-}
+  connected = lift connected
   {-# INLINE connected #-}
+  disconnected = lift disconnected
   {-# INLINE disconnected #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t m, NetworkServer t m, MonadCatch (mt m), MonadTrans mt) => NetworkServer t (mt m) where
-  serverListen = lift . serverListen
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkServer t a m, MonadCatch (mt m), MonadTrans mt, HasNetworkBackend a) => NetworkServer t a (mt m) where
   peerConnected = lift peerConnected
-  peerDisconnected = lift peerDisconnected
-  disconnect e = lift $ disconnect e
-  disconnectPeer e = lift $ disconnectPeer e
-  disconnectPeers e = lift $ disconnectPeers e
-  disconnectPeerM e = lift $ disconnectPeerM e
-  networkPeers = lift networkPeers
-  {-# INLINE serverListen #-}
   {-# INLINE peerConnected #-}
+  peerDisconnected = lift peerDisconnected
   {-# INLINE peerDisconnected #-}
-  {-# INLINE disconnect #-}
+  disconnectPeer e = lift $ disconnectPeer e
   {-# INLINE disconnectPeer #-}
+  disconnectPeers e = lift $ disconnectPeers e
   {-# INLINE disconnectPeers #-}
+  disconnectPeerM e = lift $ disconnectPeerM e
   {-# INLINE disconnectPeerM #-}
+  networkPeers = lift networkPeers
   {-# INLINE networkPeers #-}
 
 -- | Variation of 'msgSend' with static peer
-peerSend :: (LoggingMonad t m, NetworkMonad t m)
-  => Peer -> Event t (ChannelID, Message) -> m (Event t ())
-peerSend peer e = msgSend $ fmap (\(a, b) -> (peer, a, b)) e
+peerSend :: NetworkMonad t a m
+  => Peer a -- ^ Remote peer to whom send the message
+  -> Event t (ChannelId, MessageType, ByteString) -- ^ Message payload
+  -> m (Event t ())
+peerSend peer e = msgSend $ fmap (\(a, b, c) -> (peer, a, b, c)) e
 
 -- | Variation of 'msgSend' with static peer and channel
-peerChanSend :: (LoggingMonad t m, NetworkMonad t m)
-  => Peer -> ChannelID -> Event t Message -> m (Event t ())
-peerChanSend peer chan e = msgSend $ fmap (\a -> (peer, chan, a)) e
+peerChanSend :: NetworkMonad t a m
+  => Peer a -- ^ Remote peer to whom send the message
+  -> ChannelId -- ^ Static ID of channel to use
+  -> Event t (MessageType, ByteString) -- ^ Message payload
+  -> m (Event t ())
+peerChanSend peer chan e = msgSend $ fmap (\(a, b) -> (peer, chan, a, b)) e
 
 -- | Variation of 'msgSendMany' with static peer
-peerSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
-  => Peer -> Event t (f (ChannelID, Message)) -> m (Event t ())
-peerSendMany peer e = msgSendMany $ fmap (\(a, b) -> (peer, a, b)) <$> e
+peerSendMany :: (NetworkMonad t a m, Foldable f, Functor f)
+  => Peer a -> Event t (f (ChannelId, MessageType, ByteString)) -> m (Event t ())
+peerSendMany peer e = msgSendMany $ fmap (\(a, b, c) -> (peer, a, b, c)) <$> e
 
 -- | Variation of 'msgSendMany' with static peer and channel
-peerChanSendMany :: (LoggingMonad t m, NetworkMonad t m, Foldable f, Functor f)
-  => Peer -> ChannelID -> Event t (f Message) -> m (Event t ())
-peerChanSendMany peer chan e = msgSendMany $ fmap (\a -> (peer, chan, a)) <$> e
+peerChanSendMany :: (NetworkMonad t a m, Foldable f, Functor f)
+  => Peer a -> ChannelId -> Event t (f (MessageType, ByteString)) -> m (Event t ())
+peerChanSendMany peer chan e = msgSendMany $ fmap (\(a, b) -> (peer, chan, a, b)) <$> e
 
 -- | Specialisation of 'networkMessage' event for given peer
-peerMessage :: NetworkMonad t m => Peer -> m (Event t (ChannelID, BS.ByteString))
+peerMessage :: NetworkMonad t a m => Peer a -> m (Event t (ChannelId, ByteString))
 peerMessage peer = do
   emsg <- networkMessage
   return $ fforMaybe emsg $ \(msgPeer, ch, bs) -> if msgPeer == peer
@@ -231,7 +205,7 @@ peerMessage peer = do
     else Nothing
 
 -- | Specialisation of 'networkMessage' event for given cahnnel
-chanMessage :: NetworkMonad t m => ChannelID -> m (Event t (Peer, BS.ByteString))
+chanMessage :: NetworkMonad t a m => ChannelId -> m (Event t (Peer a, ByteString))
 chanMessage chan = do
   emsg <- networkMessage
   return $ fforMaybe emsg $ \(peer, ch, bs) -> if chan == ch
@@ -239,7 +213,7 @@ chanMessage chan = do
     else Nothing
 
 -- | Specialisation of 'networkMessage' event for given peer and channel
-peerChanMessage :: NetworkMonad t m => Peer -> ChannelID -> m (Event t BS.ByteString)
+peerChanMessage :: NetworkMonad t a m => Peer a -> ChannelId -> m (Event t ByteString)
 peerChanMessage peer chan = do
   emsg <- networkMessage
   return $ fforMaybe emsg $ \(msgPeer, ch, bs) -> if msgPeer == peer && ch == chan
@@ -247,12 +221,12 @@ peerChanMessage peer chan = do
     else Nothing
 
 -- | Terminate all connections and destroy host object
-terminateNetwork :: NetworkServer t m => Event t () -> m (Event t ())
+terminateNetwork :: NetworkServer t a m => Event t () -> m (Event t ())
 terminateNetwork e = do
   peers <- networkPeers
   performAppHost $ ffor e $ const $ do
     mapM_ disconnectPeerM =<< sample (current peers)
-    terminateHost
+    terminateBackend
 
 -- | Action with 'Peer' in 'peersCollection'
 data PeerAction = PeerRemove | PeerAdd
@@ -260,11 +234,11 @@ data PeerAction = PeerRemove | PeerAdd
 -- | Create component for each connected peer and automatically handle peer
 -- connection and disconnection. The function has special input to manually
 -- adding and removing peers from collection.
-peersCollection :: NetworkServer t m
-  => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
-  -> (Peer -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
-  -> (Peer -> m a) -- ^ Widget of single peer
-  -> m (Dynamic t (Map Peer a)) -- ^ Collected output of all currently active peers
+peersCollection :: NetworkServer t a m
+  => Event t (Map (Peer a) PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer a -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
+  -> (Peer a -> m b) -- ^ Widget of single peer
+  -> m (Dynamic t (Map (Peer a) b)) -- ^ Collected output of all currently active peers
 peersCollection manualE peerChecker handlePeer = do
   -- transform manual actions
   let manualE' = fmap converAction <$> manualE
@@ -290,7 +264,7 @@ peersCollection manualE peerChecker handlePeer = do
 
 -- | Create component for each connected peer and automatically handle peer
 -- connection and disconnection.
-processPeers :: NetworkServer t m => (Peer -> m a) -> m (Dynamic t (Map Peer a))
+processPeers :: NetworkServer t a m => (Peer a -> m b) -> m (Dynamic t (Map (Peer a) b))
 processPeers = peersCollection never (const $ pure True)
 
 -- | Defines that 'a' structure has disconnect event
@@ -303,11 +277,11 @@ class HasDisconnect a where
 --
 -- In distinct from 'processPeers' the components inside the collection can
 -- disconnect themselves.
-peersCollectionWithDisconnect :: (NetworkServer t m, HasDisconnect a)
-  => Event t (Map Peer PeerAction) -- ^ Fires when user wants to add/remove peers from collection
-  -> (Peer -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
-  -> (Peer -> m a) -- ^ Component for each peer
-  -> m (Dynamic t (Map Peer a)) -- ^ Collected output of peers components
+peersCollectionWithDisconnect :: (NetworkServer t a m, HasDisconnect b)
+  => Event t (Map (Peer a) PeerAction) -- ^ Fires when user wants to add/remove peers from collection
+  -> (Peer a -> PushM t Bool) -- ^ Cheker that is run each time new peer is connected that indicates whether to add the peer to the collection or not.
+  -> (Peer a -> m b) -- ^ Component for each peer
+  -> m (Dynamic t (Map (Peer a) b)) -- ^ Collected output of peers components
 peersCollectionWithDisconnect manualE peerChecker handlePeer = do
   -- convert manual events
   let manualE' = fmap converAction <$> manualE
@@ -341,15 +315,15 @@ peersCollectionWithDisconnect manualE peerChecker handlePeer = do
 --
 -- In distinct from 'processPeers' the components inside the collection can
 -- disconnect themselves.
-processPeersWithDisconnect :: (NetworkServer t m, HasDisconnect a)
-  => (Peer -> m a) -> m (Dynamic t (Map Peer a))
+processPeersWithDisconnect :: (NetworkServer t a m, HasDisconnect b)
+  => (Peer a -> m b) -> m (Dynamic t (Map (Peer a) b))
 processPeersWithDisconnect = peersCollectionWithDisconnect never (const $ pure True)
 
 -- | Switch to provided component when client is connected to server.
-whenConnected :: NetworkClient t m
-  => m a -- ^ The component is used when client is not connected (yet or already)
-  -> (Peer -> m a) -- ^ The component is used when client is connected to server
-  -> m (Dynamic t a) -- ^ Collected result from both stages.
+whenConnected :: NetworkClient t a m
+  => m b -- ^ The component is used when client is not connected (yet or already)
+  -> (Peer a -> m b) -- ^ The component is used when client is connected to server
+  -> m (Dynamic t b) -- ^ Collected result from both stages.
 whenConnected whenDown m = do
   -- Check if the server is already exising at build time
   curServerDyn <- serverPeer
@@ -366,10 +340,10 @@ whenConnected whenDown m = do
 -- | Switch to provided component when client is connected to server.
 --
 -- Same as 'whenConnected' but provides ability to self disconnect for the client.
-whenConnectedWithDisconnect :: (NetworkClient t m, HasDisconnect a)
-  => m a -- ^ The component is used when client is not connected (yet or already)
-  -> (Peer -> m a) -- ^ The component is used when client is connected to server
-  -> m (Dynamic t a) -- ^ Collected result from both stages.
+whenConnectedWithDisconnect :: (NetworkClient t a m, HasDisconnect b)
+  => m b -- ^ The component is used when client is not connected (yet or already)
+  -> (Peer a -> m b) -- ^ The component is used when client is connected to server
+  -> m (Dynamic t b) -- ^ Collected result from both stages.
 whenConnectedWithDisconnect whenDown m = do
   serverE <- connected
   disconE <- disconnected

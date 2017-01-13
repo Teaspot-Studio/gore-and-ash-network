@@ -1,3 +1,12 @@
+{-|
+Module      : Game.GoreAndAsh.Network
+Description : Network backend API
+Copyright   : (c) Anton Gushcha, 2015-2017
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Network.Backend(
     ChannelId(..)
   , RemoteAddress
@@ -11,6 +20,7 @@ module Game.GoreAndAsh.Network.Backend(
 import Control.DeepSeq
 import Control.Monad.IO.Class
 import Data.ByteString (ByteString)
+import Data.Typeable
 import Data.Word
 import GHC.Generics
 
@@ -44,6 +54,8 @@ data SendError a = SendError {
 , sendPayload     :: !ByteString
 , sendDetails     :: !(BackendSendError a)
 } deriving (Generic)
+
+deriving instance HasNetworkBackend a => Show (SendError a)
 
 -- | Holds info about FRP triggers the backend should use and creation options
 -- specific for the backend.
@@ -81,7 +93,16 @@ data NetworkBackend a = NetworkBackend {
 } deriving (Generic)
 
 -- | Abstract over network backend (ENet or TCP, for instance)
-class HasNetworkBackend a where
+class ( Show (BackendCreateError a)
+      , Show (BackendSendError a)
+      , Show (BackendConnectError a)
+      , Show (BackendEventError a)
+      , Show (BackendSendError a)
+      , Eq (Peer a)
+      , Ord (Peer a)
+      , Show (Peer a)
+      , Typeable a)
+  => HasNetworkBackend a where
   type Peer a :: * -- ^ Represents connection to remote machine
   type BackendOptions a :: * -- ^ Represents additional options of backend
   type ConnectOptions a :: * -- ^ Represents additional options for connection creation

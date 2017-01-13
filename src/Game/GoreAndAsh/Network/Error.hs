@@ -15,28 +15,21 @@ module Game.GoreAndAsh.Network.Error(
 
 import Control.Exception
 import Data.Monoid
-import Network.Socket (SockAddr)
-
-import qualified Network.ENet.Bindings as B
+import Data.Typeable
+import GHC.Generics
 
 import Game.GoreAndAsh.Logging
-import Game.GoreAndAsh.Network.State
-import Game.GoreAndAsh.Network.Message
+import Game.GoreAndAsh.Network.Backend
 
--- | Error that can be raised in network module
-data NetworkError =
-    NetworkInitFail -- ^ Failed to initialise network host
-  | NetworkConnectFail SockAddr -- ^ Failed to connect to remote server
-  | NetworkSendFail Peer B.ChannelID Message -- ^ Failed to send message
-  deriving (Show)
+-- | Error that can be raised in network module and thrown to your code
+data NetworkError a =
+    NetworkBackendCreationFail (BackendCreateError a)
+  deriving (Generic)
 
-instance Exception NetworkError
+deriving instance HasNetworkBackend a => Show (NetworkError a)
+instance (Typeable a, HasNetworkBackend a) => Exception (NetworkError a)
 
 -- | Make human readable description of network error
-renderNetworkError :: NetworkError -> LogStr
-renderNetworkError e = case e of
-  NetworkInitFail -> "Failed to initialise network module (bind failed)"
-  NetworkConnectFail addr -> "Failed to connect to addr '" <> showl addr <> "'"
-  NetworkSendFail _ ch msg -> "Failed to send message over channel '"
-    <> showl ch <> "' with payload '"
-    <> showl msg <> "'"
+renderNetworkError :: HasNetworkBackend a => NetworkError a -> LogStr
+renderNetworkError ne = case ne of
+  NetworkBackendCreationFail e -> "Failed to create backend for network module: " <> showl e

@@ -16,41 +16,30 @@ module Game.GoreAndAsh.Network.Module(
     NetworkT(..)
   ) where
 
-import Control.Concurrent
-import Control.Concurrent.STM.TChan
-import Control.Exception.Base (IOException)
 import Control.Monad.Base
 import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.Reader
-import Control.Monad.STM
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
 import Data.Monoid
 import Data.Proxy
 import Data.Set (Set)
-import Data.Word
-import Foreign hiding (peek)
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network.API
-import Game.GoreAndAsh.Network.Error
-import Game.GoreAndAsh.Network.Message
+import Game.GoreAndAsh.Network.Backend
 import Game.GoreAndAsh.Network.Options
 import Game.GoreAndAsh.Network.State
-import Network.ENet
-import Network.ENet.Host
-import Network.ENet.Packet (peek)
-import Network.Socket (SockAddr)
+import Network.Socket (withSocketsDo)
 
 import qualified Data.Set as S
-import qualified Network.ENet.Bindings as B
-import qualified Network.ENet.Packet as P
-import qualified Network.ENet.Peer as P
 
 -- | Monad transformer of network core module.
 --
 -- [@t@] - FRP engine implementation, can be ignored almost everywhere.
+--
+-- [@b@] - Network backend the stack monad use;
 --
 -- [@m@] - Next monad in modules monad stack;
 --
@@ -62,21 +51,21 @@ import qualified Network.ENet.Peer as P
 -- newtype AppMonad t a = AppMonad (LoggingT (NetworkT t (GameMonad t)) a)
 --   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
 -- @
-newtype NetworkT t m a = NetworkT { runNetworkT :: ReaderT (NetworkEnv t) m a }
-  deriving (Functor, Applicative, Monad, MonadReader (NetworkEnv t), MonadFix
+newtype NetworkT t b m a = NetworkT { runNetworkT :: ReaderT (NetworkEnv t b) m a }
+  deriving (Functor, Applicative, Monad, MonadReader (NetworkEnv t b), MonadFix
     , MonadIO, MonadThrow, MonadCatch, MonadMask, MonadSample t, MonadHold t)
 
-instance MonadTrans (NetworkT t) where
+instance MonadTrans (NetworkT t a) where
   lift = NetworkT . lift
 
-instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (NetworkT t m) where
+instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (NetworkT t a m) where
   newEventWithTrigger = lift . newEventWithTrigger
   newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
 
-instance MonadSubscribeEvent t m => MonadSubscribeEvent t (NetworkT t m) where
+instance MonadSubscribeEvent t m => MonadSubscribeEvent t (NetworkT t a m) where
   subscribeEvent = lift . subscribeEvent
 
-instance MonadAppHost t m => MonadAppHost t (NetworkT t m) where
+instance MonadAppHost t m => MonadAppHost t (NetworkT t a m) where
   getFireAsync = lift getFireAsync
   getRunAppHost = do
     runner <- NetworkT getRunAppHost
@@ -84,52 +73,48 @@ instance MonadAppHost t m => MonadAppHost t (NetworkT t m) where
   performPostBuild_ = lift . performPostBuild_
   liftHostFrame = lift . liftHostFrame
 
-instance MonadTransControl (NetworkT t) where
-  type StT (NetworkT t) a = StT (ReaderT (NetworkEnv t)) a
+instance MonadTransControl (NetworkT t b) where
+  type StT (NetworkT t b) a = StT (ReaderT (NetworkEnv t b)) a
   liftWith = defaultLiftWith NetworkT runNetworkT
   restoreT = defaultRestoreT NetworkT
 
-instance MonadBase b m => MonadBase b (NetworkT t m) where
+instance MonadBase b m => MonadBase b (NetworkT t a m) where
   liftBase = NetworkT . liftBase
 
-instance (MonadBaseControl b m) => MonadBaseControl b (NetworkT t m) where
-  type StM (NetworkT t m) a = ComposeSt (NetworkT t) m a
+instance (MonadBaseControl b m) => MonadBaseControl b (NetworkT t backend m) where
+  type StM (NetworkT t backend m) a = ComposeSt (NetworkT t backend) m a
   liftBaseWith     = defaultLiftBaseWith
   restoreM         = defaultRestoreM
 
-instance MonadResource m => MonadResource (NetworkT t m) where
+instance MonadResource m => MonadResource (NetworkT t a m) where
   liftResourceT = NetworkT . liftResourceT
 
--- | Action that fires event about incoming message
-type MessageEventFire = MessageEventPayload -> IO Bool
--- | Action that fires event about peer connection
-type ConnectPeerFire = Peer -> IO Bool
--- | Action that fires event about peer disconnection
-type DisconnectPeerFire = Peer -> IO Bool
 
-instance (MonadIO (HostFrame t), GameModule t m, MonadAppHost t m, MonadCatch m, MonadBaseControl IO m) => GameModule t (NetworkT t m) where
-  type ModuleOptions t (NetworkT t m) = NetworkOptions (ModuleOptions t m)
+instance ( MonadIO (HostFrame t)
+         , MonadThrow (HostFrame t)
+         , GameModule t m
+         , MonadAppHost t m
+         , MonadCatch m
+         , LoggingMonad t m
+         , MonadBaseControl IO m
+         , HasNetworkBackend a
+  ) => GameModule t (NetworkT t a m) where
+  type ModuleOptions t (NetworkT t a m) = NetworkOptions (ModuleOptions t m) a
 
   runModule opts m = do
-    (messageE, messageFire) <- newExternalEvent
-    (connPeerE, fireConnPeer) <- newExternalEvent
-    (disconnPeerE, fireDisconnPeer) <- newExternalEvent
-    s <- newNetworkEnv opts messageE connPeerE disconnPeerE fireDisconnPeer
-    a <- runModule (networkNextOptions opts) (runReaderT (runNetworkT m') s)
-    let pollFunc = if networkPollTimeout (networkEnvOptions s) == 0
-          then serviceUnsafe else service
-    processNetEvents s messageFire fireConnPeer fireDisconnPeer pollFunc (networkSendChannel s)
-    return a
+    s <- newNetworkEnv opts
+    runModule (networkOptsNextOptions opts) (runReaderT (runNetworkT m') s)
     where
       m' = do
+        handleNetworkServer
         handlePeersCollection =<< asks networkEnvPeers
         m
 
-  withModule t _ = withENetDo . withModule t (Proxy :: Proxy m)
+  withModule t _ =  withSocketsDo . withModule t (Proxy :: Proxy m)
 
 -- | Update internal collection of peers
-handlePeersCollection :: (MonadAppHost t m, NetworkServer t m)
-  => ExternalRef t (Set Peer) -- ^ Collection of peers
+handlePeersCollection :: (MonadAppHost t m, NetworkServer t a m)
+  => ExternalRef t (Set (Peer a)) -- ^ Collection of peers
   -> m ()
 handlePeersCollection ref = do
   connE <- peerConnected
@@ -139,131 +124,74 @@ handlePeersCollection ref = do
   performEvent_ $ ffor dconnE $ \peer ->
     modifyExternalRef ref $ \ps -> (S.delete peer ps, ())
 
--- | Poll all events from ENet, does nothing when system doesn't have any initiated host object
-processNetEvents :: forall t m . MonadAppHost t m
-  => NetworkEnv t       -- ^ Context that holds reference with host
-  -> MessageEventFire   -- ^ Action that fires event about incoming message
-  -> ConnectPeerFire    -- ^ Action that fires event about connected peer
-  -> DisconnectPeerFire -- ^ Action that fires event about disconnected peer
-  -> ENetServiceFunc    -- ^ Service function for ENet
-  -> SendChannel        -- ^ Channel with message the function should send
-  -> m ()
-processNetEvents st msgFire fireConnPeer fireDisconnPeer enetService msgChan = do
-  rec termatorPrevDyn <- holdAppHost (return noTerminator) $
-        ffor (externalEvent $ networkEnvHost st) $ \case
-          Nothing -> return noTerminator
-          Just host -> do
-            terminatorPref <- sample (current termatorPrevDyn)
-            liftIO terminatorPref
-            tid <- handleEvents host
-            return $ killThread tid
-  return ()
-  where
-    noTerminator = return ()
-    awaitForEvent = networkPollTimeout $ networkEnvOptions st
+-- | Watch after server peer creation/destruction and fill internal reference with
+-- its current value
+handleNetworkServer :: MonadAppHost t m => NetworkT t a m ()
+handleNetworkServer = do
+  NetworkEnv{..} <- ask
+  let connE = networkEnvLocalConnected
+      discE = networkEnvLocalDisconnected
+  performEvent_ $ ffor connE $ \peer ->
+    writeExternalRef networkEnvServer (Just peer)
+  performEvent_ $ ffor discE $ const $
+    writeExternalRef networkEnvServer Nothing
 
-    handleEvents :: Host -> m ThreadId
-    handleEvents host = liftIO . forkOS $ forever $ do
-      me <- enetService host awaitForEvent
-      sendAllMsgs
-      case me of
-        Nothing -> return ()
-        Just e -> handleEvent e
-
-    sendAllMsgs :: IO ()
-    sendAllMsgs = do
-      mmsg <- atomically $ tryReadTChan msgChan
-      case mmsg of
-        Nothing -> return ()
-        Just (SendPayload peer chan msg) -> do
-          let sendAction = P.send peer chan =<< P.poke (messageToPacket msg)
-          catch sendAction $ \(e :: IOException) ->
-            putStrLn $ "Network: failed to send packet '" <> show e <> "'"
-          sendAllMsgs
-
-    handleEvent :: B.Event -> IO ()
-    handleEvent (B.Event et peer ch edata packetPtr) = case et of
-      B.None -> detailLog "Network: Event none"
-      B.Connect -> do
-        detailLog "Network: Peer connected"
-        _ <- fireConnPeer peer
-        return ()
-      B.Disconnect -> do
-        detailLog $ "Network: Peer disconnected, code " <> show edata
-        _ <- fireDisconnPeer peer
-        return ()
-      B.Receive -> do
-        (Packet !fs !bs) <- peek packetPtr
-        let msgt = bitsToMessageType fs
-        detailLog $ "Network: Received message at channel " <> show ch <> ": "
-          <> show msgt <> ", payload: " <> show bs
-        res <- msgFire (peer, ch, msgt, bs)
-        unless res $ putStrLn "NO READERS FOR MESSAGE EVENT!"
-        return ()
-
-    detailLog = when (networkDetailedLogging $ networkEnvOptions st) . putStrLn
-
-instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkMonad t (NetworkT t m) where
-  networkMessage = fmap (\(peer, ch, _, bs) -> (peer, ch, bs)) <$> asks networkEnvMessageEvent
+instance {-# OVERLAPPING #-} (
+    MonadBaseControl IO m
+  , MonadCatch m
+  , MonadAppHost t m
+  , LoggingMonad t m
+  , HasNetworkBackend a
+  ) => NetworkMonad t a (NetworkT t a m) where
+  networkMessage = fmap (\(peer, ch, _, bs) -> (peer, ch, bs)) <$> asks networkEnvIncomingMessage
   {-# INLINE networkMessage #-}
 
-  msgSendM peer chan msg = do
+  msgSendM peer chan mt msg = do
     NetworkEnv{..} <- ask
-    let detailed = networkDetailedLogging networkEnvOptions
+    let NetworkBackend{..} = networkEnvBackend
+    let detailed = networkOptsDetailedLogging networkEnvOptions
     when detailed $ logMsgLnM LogInfo $ "Network: sending packet via channel "
        <> showl chan <> ", payload: " <> showl msg
-    liftIO . atomically . writeTChan networkSendChannel $ SendPayload peer chan msg
-
+    liftIO $ networkSendMessage peer chan mt msg
   {-# INLINE msgSendM #-}
 
-  msgSend e = performAppHost $ ffor e $ \(peer, chan, msg) -> msgSendM peer chan msg
+  msgSend e = performAppHost $ ffor e $ \(peer, chan, mt, msg) -> msgSendM peer chan mt msg
   {-# INLINE msgSend #-}
 
   msgSendMany e = performAppHost $ ffor e $ \msgs -> forM_ msgs $
-    \(peer, chan, msg) -> msgSendM peer chan msg
+    \(peer, chan, mt, msg) -> msgSendM peer chan mt msg
   {-# INLINE msgSendMany #-}
 
-  networkChannels = externalRefDynamic =<< asks networkEnvMaxChannels
-  {-# INLINE networkChannels #-}
+  terminateBackend = do
+    NetworkBackend{..} <- asks networkEnvBackend
+    liftIO networkTerminate
+  {-# INLINE terminateBackend #-}
 
-  terminateHost = do
-    st <- ask
-    modifyExternalRefM (networkEnvHost st) $ \case
-      Nothing -> return (Nothing, ())
-      Just host -> do
-        liftIO $ destroy host
-        return (Nothing, ())
-  {-# INLINE terminateHost #-}
+  networkSomeError = asks networkEnvSomeError
+  {-# INLINE networkSomeError #-}
 
-instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkServer t (NetworkT t m) where
-  serverListen e = do
-    st <- ask
-    detailedDyn <- loggingDebugFlag
-    performAppHostAsync $ ffor e $ \ServerListen{..} -> wrapError $ do
-      detailed <- sample (current detailedDyn)
-      host <- networkBind (Just listenAddress) listenMaxConns listenChanns listenIncoming listenOutcoming detailed
-      writeExternalRef (networkEnvHost st) (Just host)
-  {-# INLINE serverListen #-}
+  networkSendError = asks networkEnvSendError
+  {-# INLINE networkSendError #-}
 
-  peerConnected = asks networkEnvPeerConnect
+  networkConnectionError = asks networkEnvConnectionError
+  {-# INLINE networkConnectionError #-}
+
+instance {-# OVERLAPPING #-} (
+    MonadBaseControl IO m
+  , MonadCatch m
+  , MonadAppHost t m
+  , LoggingMonad t m
+  , HasNetworkBackend a
+  ) => NetworkServer t a (NetworkT t a m) where
+  peerConnected = asks networkEnvRemoteConnected
   {-# INLINE peerConnected #-}
 
-  peerDisconnected = asks newtorkStatePeerDisconnect
+  peerDisconnected = asks networkEnvRemoteDisconnected
   {-# INLINE peerDisconnected #-}
 
-  disconnect e = do
-    peers <- networkPeers
-    performAppHost $ ffor e $ const $ do
-      mapM_ disconnectPeerM =<< sample (current peers)
-      disconnectFromServerM
-  {-# INLINE disconnect #-}
-
   disconnectPeerM peer = do
-    st <- ask
-    liftIO $ do
-      P.disconnect peer 0
-      _ <- networkEnvPeerDisconnectFire st peer
-      return ()
+    NetworkBackend{..} <- asks networkEnvBackend
+    liftIO $ networkDisconnect peer
   {-# INLINE disconnectPeerM #-}
 
   disconnectPeer e = performAppHost $ fmap disconnectPeerM e
@@ -275,27 +203,29 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
   networkPeers = externalRefDynamic =<< asks networkEnvPeers
   {-# INLINE networkPeers #-}
 
-instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost t m) => NetworkClient t (NetworkT t m) where
+instance {-# OVERLAPPING #-} (
+    MonadBaseControl IO m
+  , MonadCatch m
+  , MonadAppHost t m
+  , LoggingMonad t m
+  , HasNetworkBackend a
+  ) => NetworkClient t a (NetworkT t a m) where
   clientConnect e = do
-    st <- ask
-    detailedDyn <- loggingDebugFlag
-    performAppHostAsync $ ffor e $ \ClientConnect{..} -> wrapError $ do
-      detailed <- sample (current detailedDyn)
-      host <- networkBind Nothing 1 clientChanns clientIncoming clientOutcoming detailed
-      writeExternalRef (networkEnvHost st) (Just host)
-      serv <- networkConnect host clientAddrr clientChanns 0 detailed
-      writeExternalRef (networkEnvServer st) (Just serv)
+    NetworkEnv{..} <- ask
+    let NetworkBackend{..} = networkEnvBackend
+    performEvent_ $ ffor e $ \(addr, opts) -> liftIO $ networkConnect addr opts
+    return $ fmapMaybe id $ externalEvent networkEnvServer
   {-# INLINE clientConnect #-}
 
   serverPeer = externalRefDynamic =<< asks networkEnvServer
   {-# INLINE serverPeer #-}
 
   disconnectFromServerM = do
-    st <- ask
-    modifyExternalRefM (networkEnvServer st) $ \case
+    NetworkEnv{..} <- ask
+    modifyExternalRefM networkEnvServer $ \case
       Nothing -> return (Nothing, ())
       Just serv -> do
-        liftIO $ P.disconnectNow serv 0
+        liftIO $ networkDisconnect networkEnvBackend serv
         return (Nothing, ())
   {-# INLINE disconnectFromServerM #-}
 
@@ -307,37 +237,3 @@ instance {-# OVERLAPPING #-} (MonadBaseControl IO m, MonadCatch m, MonadAppHost 
 
   disconnected = asks (fkeepNothing . externalEvent . networkEnvServer)
   {-# INLINE disconnected #-}
-
--- | Initialise network system and create host, can throw 'NetworkError'
-networkBind :: (LoggingMonad t m, MonadThrow m)
-  => Maybe SockAddr -- ^ Address to listen, Nothing is client
-  -> Word -- ^ Maximum count of connections
-  -> Word -- ^ Number of channels to open
-  -> Word32 -- ^ Incoming max bandwidth
-  -> Word32 -- ^ Outcoming max bandwidth
-  -> Bool -- ^ Detailed logging
-  -> m Host
-networkBind addr conCount chanCount inBandth outBandth detailed = do
-  phost <- liftIO $ create addr (fromIntegral conCount) (fromIntegral chanCount) inBandth outBandth
-  if phost == nullPtr
-    then throwM NetworkInitFail
-    else do
-      when detailed $ logMsgLnM LogInfo $ case addr of
-        Nothing -> "Network: client network system initalized"
-        Just a -> "Network: binded to " <> showl a
-      return phost
-
--- | Connect to remote server, can throw 'NetworkError'
-networkConnect :: (LoggingMonad t m, MonadThrow m)
-  => Host -- ^ Initialised host (local network system)
-  -> SockAddr -- ^ Address of host
-  -> Word -- ^ Count of channels to open
-  -> Word32 -- ^ Additional data (0 default)
-  -> Bool -- ^ Detailed logging (log debug info)
-  -> m Peer
-networkConnect host addr chanCount datum detailed = do
-  peer <- liftIO $ connect host addr (fromIntegral chanCount) datum
-  when (peer == nullPtr) $ throwM $ NetworkConnectFail addr
-  when detailed $ logMsgLnM LogInfo $ "Network: connected to " <> showl addr
-  return peer
-

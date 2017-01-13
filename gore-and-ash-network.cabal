@@ -35,7 +35,6 @@ library
     Game.GoreAndAsh.Network.Backend
     Game.GoreAndAsh.Network.Backend.TCP
     Game.GoreAndAsh.Network.Error
-    Game.GoreAndAsh.Network.Message
     Game.GoreAndAsh.Network.Module
     Game.GoreAndAsh.Network.Options
     Game.GoreAndAsh.Network.State
@@ -77,6 +76,7 @@ library
     RecordWildCards
     RecursiveDo
     ScopedTypeVariables
+    StandaloneDeriving
     TupleSections
     TypeFamilies
     TypeSynonymInstances
@@ -113,7 +113,9 @@ executable gore-and-ash-network-example01
     OverloadedStrings
     RecordWildCards
     ScopedTypeVariables
+    ScopedTypeVariables
     StandaloneDeriving
+    TupleSections
     TypeFamilies
     UndecidableInstances
 

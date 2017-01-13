@@ -11,60 +11,32 @@ Portability : POSIX
 module Game.GoreAndAsh.Network.Options(
     NetworkOptions
   , defaultNetworkOptions
-  , networkChannelsCount
-  , networkIncomingBandwidth
-  , networkOutcomingBandwidth
-  , networkDetailedLogging
-  , networkPollTimeout
-  , networkNextOptions
+  , networkOptsDetailedLogging
+  , networkOptsBackendOptions
+  , networkOptsNextOptions
   ) where
 
 import Control.DeepSeq
-import Data.Word
 import GHC.Generics
 
+import Game.GoreAndAsh.Network.Backend
+
 -- | Configuration of network module
-data NetworkOptions s = NetworkOptions {
-    networkChannelsCount      :: !Word -- ^ Number of channels to open
-  , networkIncomingBandwidth  :: !Word32 -- ^ Incoming max bandwidth
-  , networkOutcomingBandwidth :: !Word32 -- ^ Outcoming max bandwidth
-  , networkDetailedLogging    :: !Bool -- ^ Should log everything or not
-  -- | Maximum time that polling can await an message (milliseconds).
-  --
-  -- Note: we use a safe call to get next event from enet library, so
-  -- one call cost around 100ns. Also network packages are sent each call
-  -- to the function, so the parameter should have reasonable small value,
-  -- but not too small or you will get high CPU usage on idle run.
-  --
-  -- If set to zero, the implementation would use unsafe call to get next
-  -- event from enet library with no timeout. So it is would lead to high
-  -- CPU usage at idle.
-  , networkPollTimeout        :: !Word32
-  , networkNextOptions        :: !s -- ^ Options of underlying module
+data NetworkOptions s a = NetworkOptions {
+    networkOptsDetailedLogging    :: !Bool -- ^ Should log everything or not
+  , networkOptsBackendOptions     :: !(BackendOptions a) -- ^ Specific backend options
+  , networkOptsNextOptions        :: !s -- ^ Options of underlying module
   }
   deriving (Generic)
 
-instance NFData s => NFData (NetworkOptions s)
+instance (NFData s, NFData (BackendOptions a)) => NFData (NetworkOptions s a)
 
 -- | Default values for client configuration of network module
---
--- @
--- NetworkOptions {
--- , networkChannelsCount = 3
--- , networkIncomingBandwidth = 0
--- , networkOutcomingBandwidth = 0
--- , networkDetailedLogging = False
--- , networkPollTimeout = 100
--- , networkNextOptions = s
--- }
--- @
-defaultNetworkOptions :: s -- ^ Options of underlying module
-  -> NetworkOptions s
-defaultNetworkOptions s = NetworkOptions {
-    networkChannelsCount = 3
-  , networkIncomingBandwidth = 0
-  , networkOutcomingBandwidth = 0
-  , networkDetailedLogging = False
-  , networkPollTimeout = 100
-  , networkNextOptions = s
+defaultNetworkOptions :: BackendOptions a -- ^ Options for backend
+  -> s -- ^ Options of underlying module
+  -> NetworkOptions s a
+defaultNetworkOptions opts s = NetworkOptions {
+    networkOptsDetailedLogging = False
+  , networkOptsBackendOptions = opts
+  , networkOptsNextOptions = s
   }
