@@ -103,14 +103,21 @@ class ( Show (BackendCreateError a)
       , Show (Peer a)
       , Typeable a)
   => HasNetworkBackend a where
-  type Peer a :: * -- ^ Represents connection to remote machine
-  type BackendOptions a :: * -- ^ Represents additional options of backend
-  type ConnectOptions a :: * -- ^ Represents additional options for connection creation
+  -- | Represents connection to remote machine
+  type Peer a :: *
+  -- | Represents additional options of backend
+  type BackendOptions a :: *
+  -- | Represents additional options for connection creation
+  type ConnectOptions a :: *
 
-  type BackendCreateError  a :: * -- ^ Type of creation error for the backend
-  type BackendConnectError a :: * -- ^ Type of connection error for the backend
-  type BackendEventError   a :: * -- ^ Type of generic event error for the backend
-  type BackendSendError    a :: * -- ^ Type of send message error for the backend
+  -- | Type of creation error for the backend
+  type BackendCreateError  a :: *
+  -- | Type of connection error for the backend
+  type BackendConnectError a :: *
+  -- | Type of generic event error for the backend
+  type BackendEventError   a :: *
+  -- | Type of send message error for the backend
+  type BackendSendError    a :: *
 
   -- | Initiate network backend with given parameters and event triggers.
   createNetworkBackend :: MonadIO m => NetworkBackendContext a
