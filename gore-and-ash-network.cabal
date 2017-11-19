@@ -1,5 +1,5 @@
 name:                gore-and-ash-network
-version:             2.0.0.0
+version:             2.0.1.0
 synopsis:            Core module for Gore&Ash engine with low level network API
 description:         Please see README.md
 homepage:            https://github.com/Teaspot-Studio/gore-and-ash-network
@@ -47,7 +47,7 @@ library
     , containers            >= 0.5.6.2  && < 0.6
     , deepseq               >= 1.4.1.1  && < 1.5
     , exceptions            >= 0.8.0.2  && < 0.9
-    , extra                 >= 1.4.2    && < 1.5
+    , extra                 >= 1.4.2    && < 1.6
     , gore-and-ash          >= 2.0.0.0  && < 2.1
     , gore-and-ash-logging  >= 3.0.0.0  && < 3.1
     , immortal              >= 0.2      && < 0.3
