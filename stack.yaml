@@ -1,14 +1,14 @@
 # For more information, see: https://github.com/commercialhaskell/stack/blob/release/doc/yaml_configuration.md
 
 # Specifies the GHC version and set of packages available (e.g., lts-3.5, nightly-2015-09-21, ghc-7.10.2)
-resolver: lts-9.13
+resolver: lts-11.9
 
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
 - location:
     git: https://github.com/reflex-frp/reflex.git
-    commit: 60d2878142943487987feeeea108dbed5405f469
+    commit: e549ebb9439bc8fbf3152e1e84a9e62b9eadd40e
   extra-dep: true
 - location:
     git: https://github.com/bennofs/reflex-host.git
@@ -16,11 +16,11 @@ packages:
   extra-dep: true
 - location:
     git: https://github.com/teaspot-studio/gore-and-ash.git
-    commit: 53581682c40e44e587be85228cefa9fcdbb57e88
+    commit: a891a38c2ca6c57eacb0ce26682fff1ae543d571
   extra-dep: true
 - location:
     git: https://github.com/teaspot-studio/gore-and-ash-logging.git
-    commit: ec3d38cfa9dd14832b57516168d3179e20fc52ec
+    commit: 40787aff2641ed80c63ec2b7b91462c9052c51a2
   extra-dep: true
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)

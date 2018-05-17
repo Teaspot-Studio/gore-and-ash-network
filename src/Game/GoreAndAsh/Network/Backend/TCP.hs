@@ -48,6 +48,7 @@ import GHC.Generics
 import Network.Socket (ServiceName, HostName)
 import Network.Transport
 import Network.Transport.TCP
+import Network.Transport.TCP.Internal (encodeEndPointAddress, decodeEndPointAddress)
 
 import qualified Control.Immortal as Immortal
 import qualified Data.Binary.Get as B
@@ -126,7 +127,7 @@ instance HasNetworkBackend TCPBackend where
   -- | Initiate network backend with given parameters and event triggers.
   createNetworkBackend ctx = liftIO $ do
     let TCPBackendOpts{..} = networkBackendOptions ctx
-    res <- createTransport tcpHostName tcpServiceName tcpParameters
+    res <- createTransport tcpHostName tcpServiceName (tcpHostName,) tcpParameters
     case res of
       Left er -> return $ Left $ Left er
       Right transport -> do
