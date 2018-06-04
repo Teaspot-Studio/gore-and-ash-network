@@ -38,7 +38,7 @@ type MessageEventPayload a = (Peer a, ChannelId, MessageType, BS.ByteString)
 -- [@a@] - Backend for the network layer. For instance, 'TCPBackend'
 data NetworkEnv t a = NetworkEnv {
   -- | Store connection options that were used to create the state.
-  networkEnvOptions            :: !(NetworkOptions () a)
+  networkEnvOptions            :: !(NetworkOptions a)
   -- | Backend that implements low-level network operations.
 , networkEnvBackend            :: !(NetworkBackend a)
   -- | Stored information about connection to server. Used by client.
@@ -67,21 +67,21 @@ data NetworkEnv t a = NetworkEnv {
 } deriving (Generic)
 
 -- | Creates initial state and backend
-newNetworkEnv :: forall t m a s . (MonadAppHost t m, MonadThrow m, HasNetworkBackend a)
-  => NetworkOptions s a -- ^ Initialisation options
-  -> m (NetworkEnv t a)
+newNetworkEnv :: forall t m a s . (MonadGame t m, HasNetworkBackend a)
+  => NetworkOptions a -- ^ Initialisation options
+  -> m (Either (NetworkError a) (NetworkEnv t a))
 newNetworkEnv opts = do
   serv <- newExternalRef Nothing
   peers <- newExternalRef mempty
   maxchans <- newExternalRef 0
-  (localConnectedE, localConnectedTrigger) <- newExternalEvent
-  (localDisconnectedE, localDisconnectedTrigger) <- newExternalEvent
-  (remoteConnectedE, remoteConnectedTrigger) <- newExternalEvent
-  (remoteDisconnectedE, remoteDisconnectedTrigger) <- newExternalEvent
-  (incomingMessageE, incomingMessageTrigger) <- newExternalEvent
-  (someErrorE, someErrorTrigger) <- newExternalEvent
-  (sendErrorE, sendErrorTrigger) <- newExternalEvent
-  (connErrorE, connErrorTrigger) <- newExternalEvent
+  (localConnectedE, localConnectedTrigger) <- newTriggerEvent
+  (localDisconnectedE, localDisconnectedTrigger) <- newTriggerEvent
+  (remoteConnectedE, remoteConnectedTrigger) <- newTriggerEvent
+  (remoteDisconnectedE, remoteDisconnectedTrigger) <- newTriggerEvent
+  (incomingMessageE, incomingMessageTrigger) <- newTriggerEvent
+  (someErrorE, someErrorTrigger) <- newTriggerEvent
+  (sendErrorE, sendErrorTrigger) <- newTriggerEvent
+  (connErrorE, connErrorTrigger) <- newTriggerEvent
   let
     backendContext = NetworkBackendContext {
         networkBackendOptions           = networkOptsBackendOptions opts
@@ -96,9 +96,9 @@ newNetworkEnv opts = do
       }
   mbackend <- createNetworkBackend backendContext
   case mbackend of
-    Left er -> throwM (NetworkBackendCreationFail er :: NetworkError a)
-    Right backend -> return NetworkEnv {
-        networkEnvOptions             = opts { networkOptsNextOptions = () }
+    Left er -> pure $ Left (NetworkBackendCreationFail er :: NetworkError a)
+    Right backend -> pure $ Right NetworkEnv {
+        networkEnvOptions             = opts
       , networkEnvBackend             = backend
       , networkEnvServer              = serv
       , networkEnvPeers               = peers

@@ -9,7 +9,7 @@ import Game.GoreAndAsh.Network.Backend.TCP
 import System.Environment
 
 -- | Application monad that is used for implementation of game API
-type AppMonad = TimerT Spider (NetworkT Spider TCPBackend (LoggingT Spider(GameMonad Spider)))
+type AppMonad = NetworkT Spider TCPBackend (LoggingT Spider GMSpider)
 
 -- Server application.
 -- The application should be generic in the host monad that is used
@@ -43,7 +43,7 @@ appServer p = do
 
 -- Client application.
 -- The application should be generic in the host monad that is used
-appClient :: (LoggingMonad t m, TimerMonad t m, NetworkClient t TCPBackend m) => HostName -> ServiceName -> m ()
+appClient :: (LoggingMonad t m, NetworkClient t TCPBackend m) => HostName -> ServiceName -> m ()
 appClient host serv = do
   e <- getPostBuild
   let EndPointAddress addr = encodeEndPointAddress host serv 0
@@ -80,12 +80,15 @@ main = do
         Client host serv -> appClient host serv
         Server port -> appServer port
       tcpOpts = TCPBackendOpts {
-          tcpHostName = "localhost"
+          tcpHostName = "127.0.0.1"
         , tcpServiceName = case mode of
              Client _ _ -> ""
              Server port -> port
         , tcpParameters = defaultTCPParameters
         , tcpDuplexHints = defaultConnectHints
         }
-      opts = (defaultNetworkOptions tcpOpts ()) { networkOptsDetailedLogging = True }
-  runSpiderHost $ hostApp $ runModule opts (app :: AppMonad ())
+      opts = (defaultNetworkOptions tcpOpts) { networkOptsDetailedLogging = True }
+  mres <- runGM $ runLoggerT $ runNetworkT opts (app :: AppMonad ())
+  case mres of
+    Left er -> print $ renderNetworkError er
+    Right _ -> pure ()

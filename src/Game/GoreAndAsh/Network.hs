@@ -21,12 +21,13 @@ module Game.GoreAndAsh.Network(
   , HasNetworkBackend(..)
   , SendError(..)
   , NetworkT
+  , withNetwork
+  , runNetworkT
   -- ** Options
   , NetworkOptions
   , defaultNetworkOptions
   , networkOptsDetailedLogging
   , networkOptsBackendOptions
-  , networkOptsNextOptions
   -- ** Errors
   , NetworkError(..)
   , renderNetworkError

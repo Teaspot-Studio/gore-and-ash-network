@@ -13,7 +13,9 @@ Portability : POSIX
 The module contains declaration of module monad transformer and instance of 'GameModule'.
 -}
 module Game.GoreAndAsh.Network.Module(
-    NetworkT(..)
+    NetworkT
+  , withNetwork
+  , runNetworkT
   ) where
 
 import Control.Monad.Base
@@ -29,6 +31,7 @@ import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network.API
 import Game.GoreAndAsh.Network.Backend
+import Game.GoreAndAsh.Network.Error
 import Game.GoreAndAsh.Network.Options
 import Game.GoreAndAsh.Network.State
 import Network.Socket (withSocketsDo)
@@ -51,69 +54,25 @@ import qualified Data.Set as S
 -- newtype AppMonad t a = AppMonad (LoggingT (NetworkT t (GameMonad t)) a)
 --   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
 -- @
-newtype NetworkT t b m a = NetworkT { runNetworkT :: ReaderT (NetworkEnv t b) m a }
-  deriving (Functor, Applicative, Monad, MonadReader (NetworkEnv t b), MonadFix
-    , MonadIO, MonadThrow, MonadCatch, MonadMask, MonadSample t, MonadHold t)
+type NetworkT t b = ReaderT (NetworkEnv t b)
 
-instance MonadTrans (NetworkT t a) where
-  lift = NetworkT . lift
+-- | Additional initialization of underlying resoures that should be done in main function.
+withNetwork :: IO a -> IO a
+withNetwork = withSocketsDo
 
-instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (NetworkT t a m) where
-  newEventWithTrigger = lift . newEventWithTrigger
-  newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
-
-instance MonadSubscribeEvent t m => MonadSubscribeEvent t (NetworkT t a m) where
-  subscribeEvent = lift . subscribeEvent
-
-instance MonadAppHost t m => MonadAppHost t (NetworkT t a m) where
-  getFireAsync = lift getFireAsync
-  getRunAppHost = do
-    runner <- NetworkT getRunAppHost
-    return $ \m -> runner $ runNetworkT m
-  performPostBuild_ = lift . performPostBuild_
-  liftHostFrame = lift . liftHostFrame
-
-instance MonadTransControl (NetworkT t b) where
-  type StT (NetworkT t b) a = StT (ReaderT (NetworkEnv t b)) a
-  liftWith = defaultLiftWith NetworkT runNetworkT
-  restoreT = defaultRestoreT NetworkT
-
-instance MonadBase b m => MonadBase b (NetworkT t a m) where
-  liftBase = NetworkT . liftBase
-
-instance (MonadBaseControl b m) => MonadBaseControl b (NetworkT t backend m) where
-  type StM (NetworkT t backend m) a = ComposeSt (NetworkT t backend) m a
-  liftBaseWith     = defaultLiftBaseWith
-  restoreM         = defaultRestoreM
-
-instance MonadResource m => MonadResource (NetworkT t a m) where
-  liftResourceT = NetworkT . liftResourceT
-
-
-instance ( MonadIO (HostFrame t)
-         , MonadThrow (HostFrame t)
-         , GameModule t m
-         , MonadAppHost t m
-         , MonadCatch m
-         , LoggingMonad t m
-         , MonadBaseControl IO m
-         , HasNetworkBackend a
-  ) => GameModule t (NetworkT t a m) where
-  type ModuleOptions t (NetworkT t a m) = NetworkOptions (ModuleOptions t m) a
-
-  runModule opts m = do
-    s <- newNetworkEnv opts
-    runModule (networkOptsNextOptions opts) (runReaderT (runNetworkT m') s)
-    where
-      m' = do
-        handleNetworkServer
-        handlePeersCollection =<< asks networkEnvPeers
-        m
-
-  withModule t _ =  withSocketsDo . withModule t (Proxy :: Proxy m)
+-- | Execution of network layer
+runNetworkT :: (MonadGame t m, LoggingMonad t m, HasNetworkBackend b) => NetworkOptions b -> NetworkT t b m a -> m (Either (NetworkError b) a)
+runNetworkT opts m = do
+   ms <- newNetworkEnv opts
+   either (pure . Left) (fmap Right . runReaderT m') ms
+   where
+     m' = do
+       handleNetworkServer
+       handlePeersCollection =<< asks networkEnvPeers
+       m
 
 -- | Update internal collection of peers
-handlePeersCollection :: (MonadAppHost t m, NetworkServer t a m)
+handlePeersCollection :: (MonadGame t m, NetworkServer t a m)
   => ExternalRef t (Set (Peer a)) -- ^ Collection of peers
   -> m ()
 handlePeersCollection ref = do
@@ -126,7 +85,7 @@ handlePeersCollection ref = do
 
 -- | Watch after server peer creation/destruction and fill internal reference with
 -- its current value
-handleNetworkServer :: MonadAppHost t m => NetworkT t a m ()
+handleNetworkServer :: MonadGame t m => NetworkT t a m ()
 handleNetworkServer = do
   NetworkEnv{..} <- ask
   let connE = networkEnvLocalConnected
@@ -137,9 +96,7 @@ handleNetworkServer = do
     writeExternalRef networkEnvServer Nothing
 
 instance {-# OVERLAPPING #-} (
-    MonadBaseControl IO m
-  , MonadCatch m
-  , MonadAppHost t m
+    MonadGame t m
   , LoggingMonad t m
   , HasNetworkBackend a
   ) => NetworkMonad t a (NetworkT t a m) where
@@ -155,10 +112,10 @@ instance {-# OVERLAPPING #-} (
     liftIO $ networkSendMessage peer chan mt msg
   {-# INLINE msgSendM #-}
 
-  msgSend e = performAppHost $ ffor e $ \(peer, chan, mt, msg) -> msgSendM peer chan mt msg
+  msgSend e = performNetwork $ ffor e $ \(peer, chan, mt, msg) -> msgSendM peer chan mt msg
   {-# INLINE msgSend #-}
 
-  msgSendMany e = performAppHost $ ffor e $ \msgs -> forM_ msgs $
+  msgSendMany e = performNetwork $ ffor e $ \msgs -> forM_ msgs $
     \(peer, chan, mt, msg) -> msgSendM peer chan mt msg
   {-# INLINE msgSendMany #-}
 
@@ -177,9 +134,7 @@ instance {-# OVERLAPPING #-} (
   {-# INLINE networkConnectionError #-}
 
 instance {-# OVERLAPPING #-} (
-    MonadBaseControl IO m
-  , MonadCatch m
-  , MonadAppHost t m
+    MonadGame t m
   , LoggingMonad t m
   , HasNetworkBackend a
   ) => NetworkServer t a (NetworkT t a m) where
@@ -194,19 +149,17 @@ instance {-# OVERLAPPING #-} (
     liftIO $ networkDisconnect peer
   {-# INLINE disconnectPeerM #-}
 
-  disconnectPeer e = performAppHost $ fmap disconnectPeerM e
+  disconnectPeer e = performNetwork $ fmap disconnectPeerM e
   {-# INLINE disconnectPeer #-}
 
-  disconnectPeers e = performAppHost $ fmap (mapM_ disconnectPeerM) e
+  disconnectPeers e = performNetwork $ fmap (mapM_ disconnectPeerM) e
   {-# INLINE disconnectPeers #-}
 
   networkPeers = externalRefDynamic =<< asks networkEnvPeers
   {-# INLINE networkPeers #-}
 
 instance {-# OVERLAPPING #-} (
-    MonadBaseControl IO m
-  , MonadCatch m
-  , MonadAppHost t m
+    MonadGame t m
   , LoggingMonad t m
   , HasNetworkBackend a
   ) => NetworkClient t a (NetworkT t a m) where
@@ -229,7 +182,7 @@ instance {-# OVERLAPPING #-} (
         return (Nothing, ())
   {-# INLINE disconnectFromServerM #-}
 
-  disconnectFromServer = performAppHost . fmap (const disconnectFromServerM)
+  disconnectFromServer = performNetwork . fmap (const disconnectFromServerM)
   {-# INLINE disconnectFromServer #-}
 
   connected = asks (fcutMaybe . externalEvent . networkEnvServer)

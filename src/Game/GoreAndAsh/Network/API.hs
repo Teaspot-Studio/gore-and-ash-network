@@ -51,8 +51,7 @@ import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
 
 -- | API of the network module, shared operations between client and server.
-class (MonadIO m, MonadCatch m, MonadFix m, Reflex t, MonadHold t m
-     , MonadAppHost t m, LoggingMonad t m, HasNetworkBackend a)
+class (MonadGame t m, LoggingMonad t m, HasNetworkBackend a)
   => NetworkMonad t a m | m -> t, m -> a where
   -- | Fires when a network message is received
   networkMessage :: m (Event t (Peer a, ChannelId, ByteString))
@@ -125,7 +124,7 @@ class NetworkMonad t a m => NetworkServer t a m | m -> t, m -> a where
   networkPeers :: m (Dynamic t (Set (Peer a)))
 
 -- | Automatic lifting across monad stack
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t a m, MonadTrans mt, HasNetworkBackend a) => NetworkMonad t a (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadGame t (mt m), MonadIO (mt m), MonadFix (mt m), MonadHold t (mt m), LoggingMonad t m, NetworkMonad t a m, MonadTrans mt, HasNetworkBackend a) => NetworkMonad t a (mt m) where
   networkMessage = lift networkMessage
   {-# INLINE networkMessage #-}
   msgSendM peer chan mt msg = lift $ msgSendM peer chan mt msg
@@ -143,7 +142,7 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadIO (mt m), MonadCatch
   networkConnectionError = lift networkConnectionError
   {-# INLINE networkConnectionError #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkClient t a m, MonadCatch (mt m), MonadTrans mt, HasNetworkBackend a) => NetworkClient t a (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadGame t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkClient t a m, MonadTrans mt, HasNetworkBackend a) => NetworkClient t a (mt m) where
   clientConnect e = lift $ clientConnect e
   {-# INLINE clientConnect #-}
   serverPeer = lift serverPeer
@@ -157,7 +156,7 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkM
   disconnected = lift disconnected
   {-# INLINE disconnected #-}
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkServer t a m, MonadCatch (mt m), MonadTrans mt, HasNetworkBackend a) => NetworkServer t a (mt m) where
+instance {-# OVERLAPPABLE #-} (MonadGame t (mt m), LoggingMonad t m, NetworkMonad t a m, NetworkServer t a m, MonadTrans mt, HasNetworkBackend a) => NetworkServer t a (mt m) where
   peerConnected = lift peerConnected
   {-# INLINE peerConnected #-}
   peerDisconnected = lift peerDisconnected
@@ -224,9 +223,10 @@ peerChanMessage peer chan = do
 terminateNetwork :: NetworkServer t a m => Event t () -> m (Event t ())
 terminateNetwork e = do
   peers <- networkPeers
-  performAppHost $ ffor e $ const $ do
+  fmap (switch . current) $ networkHold (pure never) $ ffor e $ const $ do
     mapM_ disconnectPeerM =<< sample (current peers)
     terminateBackend
+    getPostBuild
 
 -- | Action with 'Peer' in 'peersCollection'
 data PeerAction = PeerRemove | PeerAdd
@@ -256,7 +256,7 @@ peersCollection manualE peerChecker handlePeer = do
   -- Merge all sources of peers into collection
   let delE = ffor discE $ \p -> M.singleton p (Nothing)
       updE = addE <> delE <> manualE'
-  holdKeyCollection initialPeers updE (\p _ -> handlePeer p)
+  listHoldWithKey initialPeers updE (\p _ -> handlePeer p)
   where
     converAction action = case action of
       PeerRemove -> Nothing
@@ -299,7 +299,7 @@ peersCollectionWithDisconnect manualE peerChecker handlePeer = do
   let delE = ffor discE $ \p -> M.singleton p (Nothing)
   -- recursive loop for tracking self disconnection
   rec
-    outputsDyn <- holdKeyCollection initialPeers updE (\p _ -> handlePeer p)
+    outputsDyn <- listHoldWithKey initialPeers updE (\p _ -> handlePeer p)
     let selfDelDyn = fmap (fmap (const Nothing) . getDisconnect) <$> outputsDyn
         selfDelE = switchPromptlyDyn $ mergeMap <$> selfDelDyn
         updE = addE <> delE <> selfDelE <> manualE'
@@ -335,7 +335,7 @@ whenConnected whenDown m = do
   serverE <- connected
   disconE <- disconnected
   let updE = leftmost [fmap m serverE, fmap (const whenDown) disconE]
-  holdAppHost (pure initVal) updE
+  networkHold (pure initVal) updE
 
 -- | Switch to provided component when client is connected to server.
 --
@@ -349,7 +349,7 @@ whenConnectedWithDisconnect whenDown m = do
   disconE <- disconnected
   let externalE = leftmost [fmap m serverE, fmap (const whenDown) disconE]
   rec
-    resDyn <- holdAppHost whenDown updE
+    resDyn <- networkHold whenDown updE
     let selfDiscE = switchPromptlyDyn $ getDisconnect <$> resDyn
         updE = leftmost [externalE, fmap (const whenDown) selfDiscE]
   return resDyn
